@@ -162,13 +162,17 @@ class MackolikScraper
                 'oc' => count($mk['OCA'] ?? []),
             ];
         }
+        // nsn sözlüğünün tamamı (isim eşlemesi için; 12000 karaktere kadar)
+        $nsnFull = isset($data['nsn'])
+            ? mb_substr(json_encode($data['nsn'], JSON_UNESCAPED_UNICODE), 0, 12000)
+            : null;
         return [
             'url' => $bultenUrl,
             'event_count' => count($events),
             'name_map_size' => count($this->nameMap),
-            'nsn_ornek' => is_array($data['nsn'] ?? null) ? array_slice($data['nsn'], 0, 5, true) : ($data['nsn'] ?? null),
             'first_event_teams' => is_array($first) ? (($first['HN'] ?? '') . ' - ' . ($first['AN'] ?? '')) : '',
             'markets_summary' => $summary,
+            'nsn_full' => $nsnFull,
         ];
     }
 
@@ -252,6 +256,18 @@ class MackolikScraper
         1 => 'Maç Sonucu',
     ];
 
+    /** Admin panelden yapıştırılabilen elle isim haritası (JSON {mtid: "ad"}). */
+    private ?array $customNames = null;
+    private function customNameMap(): array
+    {
+        if ($this->customNames === null) {
+            $raw = (string) Settings::get('mk_market_names', '');
+            $decoded = $raw !== '' ? json_decode($raw, true) : null;
+            $this->customNames = is_array($decoded) ? $decoded : [];
+        }
+        return $this->customNames;
+    }
+
     private function marketName(array $m): string
     {
         $mn = trim((string) ($m['MN'] ?? ''));
@@ -260,6 +276,10 @@ class MackolikScraper
         }
         $mtid = isset($m['MTID']) ? (int) $m['MTID'] : 0;
         $no = isset($m['NO']) ? (int) $m['NO'] : 0;
+        $custom = $this->customNameMap();
+        if ($mtid && isset($custom[(string) $mtid])) {
+            return (string) $custom[(string) $mtid];
+        }
         if ($mtid && isset($this->nameMap[(string) $mtid])) {
             return $this->nameMap[(string) $mtid];
         }
