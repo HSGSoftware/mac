@@ -4,22 +4,22 @@ backend/vendor/
 *.log
 backend/logs/*.log
 
-# Flutter
-app/.dart_tool/
-app/.flutter-plugins
-app/.flutter-plugins-dependencies
-app/.packages
-app/build/
-app/.pub-cache/
-app/.pub/
-app/ios/Pods/
-app/ios/.symlinks/
-app/android/.gradle/
-app/android/local.properties
-app/android/key.properties
-app/**/*.keystore
-app/**/*.jks
-app/.idea/
+# Flutter (proje deposu kökünde)
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+.pub-cache/
+.pub/
+ios/Pods/
+ios/.symlinks/
+android/.gradle/
+android/local.properties
+android/key.properties
+**/*.keystore
+**/*.jks
+.idea/
 *.iml
 
 # OS

@@ -15,7 +15,6 @@ workflows:
       # Ardından aşağıdaki 2 satırın yorumunu kaldırın:
       # groups:
       #   - android_keystore
-    working_directory: app
     scripts:
       - name: Flutter sürümü
         script: flutter --version
@@ -41,8 +40,8 @@ workflows:
       - name: App Bundle derle (AAB - Play Store)
         script: flutter build appbundle --release --dart-define=API_BASE_URL="$API_BASE_URL"
     artifacts:
-      - app/build/app/outputs/flutter-apk/*.apk
-      - app/build/app/outputs/bundle/release/*.aab
+      - build/app/outputs/flutter-apk/*.apk
+      - build/app/outputs/bundle/release/*.aab
     publishing:
       email:
         recipients:

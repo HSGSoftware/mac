@@ -36,16 +36,16 @@ Admin Panel  ──────────►  PHP (public_html/admin)      ▲
 
 ```
 mac/
-├── codemagic.yaml           # CI/CD (Android & iOS build)
-├── app/                     # Flutter uygulaması
-│   ├── lib/
-│   │   ├── core/            # tema, sabitler, api_client router
-│   │   ├── models/          # Match, Analysis, User ...
-│   │   ├── services/        # ApiClient, TokenStore
-│   │   ├── providers/       # Riverpod state
-│   │   ├── screens/         # ekranlar
-│   │   └── widgets/         # MatchCard, ProbabilityRing, AnalysisView
-│   └── android/             # Android platform (INTERNET izni dahil)
+├── codemagic.yaml           # CI/CD (Android build)
+├── pubspec.yaml             # Flutter uygulaması (proje kökünde)
+├── lib/
+│   ├── core/                # tema, sabitler, api_client, router
+│   ├── models/              # Match, Analysis, User ...
+│   ├── services/            # ApiClient, TokenStore
+│   ├── providers/           # Riverpod state
+│   ├── screens/             # ekranlar
+│   └── widgets/             # MatchCard, ProbabilityRing, AnalysisView
+├── android/                 # Android platform (INTERNET izni dahil)
 └── backend/
     ├── public_html/         # ⇒ cPanel web root'a
     │   ├── api/             # REST API (index.php + .htaccess)
@@ -98,8 +98,9 @@ Manuel test: Admin > Scraper > "Bugünü şimdi çek" veya Admin > Maçlar > "Bu
 
 ## Flutter uygulaması
 
+Flutter projesi deponun kökündedir (pubspec.yaml kökte).
+
 ```bash
-cd app
 flutter pub get
 flutter run --dart-define=API_BASE_URL=https://webdigistore.com/macradar/api/v1
 ```
