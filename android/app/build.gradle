@@ -57,7 +57,14 @@ android {
         release {
             // key.properties yoksa debug imzasıyla imzalar (yerel test derlemeleri için)
             signingConfig = keystorePropertiesFile.exists() ? signingConfigs.release : signingConfigs.debug
+            // Kod ve kaynak küçültme birlikte açılır/kapanır olmalı; çakışmayı önlemek için
+            // ikisini de açıkça kapatıyoruz (Flutter için R8 kuralları gerektiğinden güvenli varsayılan).
             minifyEnabled = false
+            shrinkResources = false
+        }
+        debug {
+            minifyEnabled = false
+            shrinkResources = false
         }
     }
 }
