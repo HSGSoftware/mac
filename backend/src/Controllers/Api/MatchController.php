@@ -26,8 +26,10 @@ class MatchController
                 LEFT JOIN leagues l ON l.id = m.league_id
                 LEFT JOIN teams ht ON ht.id = m.home_team_id
                 LEFT JOIN teams at ON at.id = m.away_team_id
-                WHERE DATE(m.start_time) = ?";
-        $params = [$date];
+                WHERE DATE(m.start_time) = ?
+                  AND m.start_time >= ?";
+        // Başlama saati geçmiş maçları gösterme (bugün için sadece yaklaşanlar)
+        $params = [$date, date('Y-m-d H:i:s')];
         if ($leagueId) {
             $sql .= ' AND m.league_id = ?';
             $params[] = $leagueId;
