@@ -147,7 +147,12 @@ Arayüz, yüklenen tasarım dosyasına göre yeniden yapıldı:
 - **Fontlar:** Archivo (genel) + JetBrains Mono (sayılar/oranlar) — `google_fonts` ile
 - **AI çıktısı** artık `guven` (1-10) ve `nedenler` ([{etiket, metin}]) alanlarını da üretir.
 
-**Mevcut kuruluma geçiş:** `Analizlerim` için yeni tablo gereklidir. cPanel > phpMyAdmin'de şu dosyayı çalıştırın:
-`backend/database/migration_2026_07_history.sql` (schema.sql'i sıfırdan kuranlar için gerek yok).
+**Mevcut kuruluma geçiş (panelsiz):** `Analizlerim` için yeni bir tablo gerekir.
+phpMyAdmin'e girmeye gerek yok — güncellenen backend dosyalarını sunucuya yükledikten sonra
+tarayıcıdan **`/migrate.php`** adresini açıp "Güncellemeleri uygula" deyin. Bu sayfa
+`database/migration_*.sql` dosyalarını otomatik ve tekrar çalıştırılabilir şekilde uygular.
+(İşiniz bitince `migrate.php`'yi silebilirsiniz.)
 
-Yeni/değişen backend dosyalarını (`src/Controllers/Api/MatchController.php`, `src/Services/AnalysisEngine.php`, `public_html/api/index.php`) sunucuya yükleyin; Flutter tarafını Codemagic'ten yeniden derleyin.
+Yüklenecek/değişen backend dosyaları: `src/Controllers/Api/MatchController.php`,
+`src/Services/AnalysisEngine.php`, `public_html/api/index.php`, `public_html/migrate.php`,
+`database/migration_2026_07_history.sql`. Flutter tarafını Codemagic'ten yeniden derleyin.
