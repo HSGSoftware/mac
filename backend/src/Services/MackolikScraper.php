@@ -96,6 +96,32 @@ class MackolikScraper
         throw new \RuntimeException('Bülten alınamadı (Nesine HTTP ' . $res['status'] . ($res['error'] ? ', ' . $res['error'] : '') . '). Scraper ayarlarından kaynağı kontrol edin.');
     }
 
+    /**
+     * Teşhis: Nesine yanıtının yapısını döndürür (admin panelde gösterilir).
+     * İlk maçın tam JSON'u sayesinde market/oran alan adları doğrulanır.
+     */
+    public function debugSample(): array
+    {
+        $bultenUrl = (string) Settings::get('scraper_bulten_url', 'https://bulten.nesine.com/api/bulten/getprebultenfull');
+        $res = HttpClient::get($bultenUrl, $this->headers(), 40);
+        if ($res['status'] !== 200 || !$res['body']) {
+            return ['error' => 'HTTP ' . $res['status'] . ' ' . ($res['error'] ?? ''), 'url' => $bultenUrl];
+        }
+        $data = json_decode($res['body'], true);
+        if (!is_array($data)) {
+            return ['error' => 'JSON çözülemedi', 'head' => mb_substr($res['body'], 0, 800)];
+        }
+        $events = $this->findNesineEvents($data);
+        $first = $events[0] ?? null;
+        return [
+            'url' => $bultenUrl,
+            'top_keys' => array_keys($data),
+            'event_count' => count($events),
+            'first_event_keys' => is_array($first) ? array_keys($first) : [],
+            'first_event' => $first,
+        ];
+    }
+
     /** Nesine yanıtında olay (event) dizisini bulur (yapı sürümüne dayanıklı). */
     private function findNesineEvents(array $data): array
     {

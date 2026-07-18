@@ -28,10 +28,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } catch (\Throwable $ex) {
             flash('Hata: ' . $ex->getMessage(), 'danger');
         }
+    } elseif ($action === 'raw_sample') {
+        try {
+            $_SESSION['raw_sample'] = (new MackolikScraper())->debugSample();
+        } catch (\Throwable $ex) {
+            $_SESSION['raw_sample'] = ['error' => $ex->getMessage()];
+        }
     }
     header('Location: scraper.php');
     exit;
 }
+
+$rawSample = $_SESSION['raw_sample'] ?? null;
+unset($_SESSION['raw_sample']);
 
 $s = Settings::all();
 $logs = Database::fetchAll('SELECT * FROM scrape_logs ORDER BY id DESC LIMIT 30');
@@ -39,10 +48,19 @@ $logs = Database::fetchAll('SELECT * FROM scrape_logs ORDER BY id DESC LIMIT 30'
 admin_header('Scraper', 'scraper.php');
 render_flash();
 ?>
-<form method="post" class="mb-4">
+<form method="post" class="mb-4 d-flex flex-wrap gap-2">
     <input type="hidden" name="csrf" value="<?= csrf_token() ?>">
     <button name="action" value="run" class="btn btn-success"><i class="bi bi-play-fill"></i> İddaa bültenini şimdi çek</button>
+    <button name="action" value="raw_sample" class="btn btn-outline-info"><i class="bi bi-braces"></i> Ham örnek göster (teşhis)</button>
 </form>
+
+<?php if ($rawSample !== null): ?>
+<div class="card p-3 mb-4">
+    <h5 class="text-light mb-2">Nesine Ham Örnek (ilk maç)</h5>
+    <p class="text-secondary small mb-2">Bu içeriğin ekran görüntüsünü/metnini geliştiriciye iletin; market ve oran alanları buna göre eşlenecek.</p>
+    <pre style="background:#0d1b2a;color:#93e6c0;padding:12px;border-radius:8px;max-height:420px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:12px;"><?= e(json_encode($rawSample, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?></pre>
+</div>
+<?php endif; ?>
 
 <div class="card p-4 mb-4">
     <h5 class="text-light mb-3">Kaynak Ayarları</h5>
