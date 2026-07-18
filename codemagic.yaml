@@ -36,9 +36,9 @@ workflows:
             echo "Keystore tanımlı değil; release APK debug anahtarıyla imzalanacak (test build)."
           fi
       - name: APK derle (release)
-        script: flutter build apk --release --dart-define=API_BASE_URL="$API_BASE_URL"
+        script: flutter build apk --release --android-skip-build-dependency-validation --dart-define=API_BASE_URL="$API_BASE_URL"
       - name: App Bundle derle (AAB - Play Store)
-        script: flutter build appbundle --release --dart-define=API_BASE_URL="$API_BASE_URL"
+        script: flutter build appbundle --release --android-skip-build-dependency-validation --dart-define=API_BASE_URL="$API_BASE_URL"
     artifacts:
       - build/app/outputs/flutter-apk/*.apk
       - build/app/outputs/bundle/release/*.aab
