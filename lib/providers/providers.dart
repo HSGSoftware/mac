@@ -111,6 +111,16 @@ final fixturesProvider =
       .toList();
 });
 
+// ---------------- Canlı maçlar ----------------
+
+final liveMatchesProvider =
+    FutureProvider.autoDispose<List<MatchItem>>((ref) async {
+  final data = await ref.read(apiClientProvider).get('/matches/live');
+  return ((data['matches'] as List?) ?? [])
+      .map((e) => MatchItem.fromJson(Map<String, dynamic>.from(e)))
+      .toList();
+});
+
 // ---------------- Maç detay ----------------
 
 final matchDetailProvider =

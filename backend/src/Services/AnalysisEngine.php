@@ -143,10 +143,33 @@ class AnalysisEngine
         $lines[] = "Maç: {$match['home_name']} vs {$match['away_name']}";
         $lines[] = "Lig: " . ($match['league_name'] ?? '-');
         $lines[] = "Tarih: " . ($match['start_time'] ?? '-');
+        // Canlı maç bağlamı: skor + dakika (canlı analiz)
+        if (($match['status'] ?? '') === 'live') {
+            $skor = ($match['ms_home'] !== null && $match['ms_away'] !== null)
+                ? $match['ms_home'] . '-' . $match['ms_away'] : 'bilinmiyor';
+            $lines[] = 'DURUM: Maç ŞU AN CANLI OYNANIYOR. Güncel skor: ' . $skor
+                . ($match['minute'] ? ', dakika: ' . $match['minute'] : '') . '.';
+            $lines[] = 'Analizini mevcut skoru ve kalan süreyi dikkate alarak yap (canlı bahis analizi).';
+        }
         $lines[] = '';
         $lines[] = 'Güncel oranlar:';
         foreach ($odds as $market => $val) {
             $lines[] = "  - $market: $val";
+        }
+        // Tüm marketlerden kısa özet (ilk 12 market) — AI'ya geniş bağlam
+        if (!empty($stats['markets']) && is_array($stats['markets'])) {
+            $lines[] = '';
+            $lines[] = 'Diğer marketler (özet):';
+            foreach (array_slice($stats['markets'], 0, 12) as $mk) {
+                if (!is_array($mk)) {
+                    continue;
+                }
+                $ops = [];
+                foreach (($mk['secenekler'] ?? []) as $o) {
+                    $ops[] = ($o['ad'] ?? '?') . '=' . ($o['oran'] ?? '?');
+                }
+                $lines[] = '  - ' . ($mk['ad'] ?? 'Market') . ': ' . implode(', ', $ops);
+            }
         }
         if (!empty($stats['form_home'])) {
             $lines[] = '';

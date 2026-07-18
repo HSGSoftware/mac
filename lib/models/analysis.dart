@@ -73,16 +73,47 @@ class Analysis {
   }
 }
 
-/// Maç detay yanıtı: maç + oranlar + istatistikler + (varsa) analiz.
+/// Bir bahis marketinin tek seçeneği (ör. "Alt" => 1.80).
+class MarketOutcome {
+  final String label;
+  final double odd;
+  MarketOutcome({required this.label, required this.odd});
+
+  factory MarketOutcome.fromJson(Map<String, dynamic> j) => MarketOutcome(
+        label: j['ad']?.toString() ?? '?',
+        odd: (j['oran'] as num?)?.toDouble() ?? 0,
+      );
+}
+
+/// Tam bir bahis marketi (ör. "2,5 Gol Alt/Üst" + seçenekleri).
+class BetMarket {
+  final String name;
+  final double? line; // gol çizgisi (SOV), varsa
+  final List<MarketOutcome> outcomes;
+  BetMarket({required this.name, this.line, required this.outcomes});
+
+  factory BetMarket.fromJson(Map<String, dynamic> j) => BetMarket(
+        name: j['ad']?.toString() ?? 'Market',
+        line: (j['sov'] as num?)?.toDouble(),
+        outcomes: ((j['secenekler'] as List?) ?? [])
+            .whereType<Map>()
+            .map((e) => MarketOutcome.fromJson(Map<String, dynamic>.from(e)))
+            .toList(),
+      );
+}
+
+/// Maç detay yanıtı: maç + oranlar + tüm marketler + istatistikler + (varsa) analiz.
 class MatchDetail {
   final Map<String, dynamic> match;
   final Map<String, double> odds;
+  final List<BetMarket> markets;
   final Map<String, dynamic> stats;
   final Analysis? analysis;
 
   MatchDetail({
     required this.match,
     required this.odds,
+    required this.markets,
     required this.stats,
     this.analysis,
   });
@@ -94,9 +125,18 @@ class MatchDetail {
         if (v is num) odds[k.toString()] = v.toDouble();
       });
     }
+    final markets = <BetMarket>[];
+    if (j['markets'] is List) {
+      for (final m in (j['markets'] as List)) {
+        if (m is Map) {
+          markets.add(BetMarket.fromJson(Map<String, dynamic>.from(m)));
+        }
+      }
+    }
     return MatchDetail(
       match: j['match'] is Map ? Map<String, dynamic>.from(j['match']) : {},
       odds: odds,
+      markets: markets,
       stats: j['stats'] is Map ? Map<String, dynamic>.from(j['stats']) : {},
       analysis: j['analysis'] is Map
           ? Analysis.fromJson(Map<String, dynamic>.from(j['analysis']))

@@ -7,9 +7,27 @@ use MacRadar\Core\Config;
 use MacRadar\Core\Database;
 use MacRadar\Core\Request;
 use MacRadar\Core\Response;
+use MacRadar\Core\Settings;
+use MacRadar\Services\MackolikScraper;
 
 class MatchController
 {
+    /** Throttle'lı tazeleme: son çekimden bu kadar sn geçtiyse kaynak yeniden çekilir. */
+    private function refreshIfStale(string $key, int $ttlSeconds, callable $fetcher): void
+    {
+        $last = (int) Settings::get($key, 0);
+        if (time() - $last < $ttlSeconds) {
+            return;
+        }
+        // Yarış koşullarını azaltmak için damgayı çekimden ÖNCE yaz
+        Settings::set($key, (string) time());
+        try {
+            $fetcher();
+        } catch (\Throwable $e) {
+            // Çekim başarısızsa akışı bozma; mevcut DB verisiyle devam et
+        }
+    }
+
     /** GET /matches?date=YYYY-MM-DD&league_id= */
     public function index(Request $req): void
     {
@@ -18,6 +36,11 @@ class MatchController
             $date = date('Y-m-d');
         }
         $leagueId = $req->input('league_id');
+
+        // Cron'suz mimari: bülten bayatsa (10 dk) kullanıcı isteğiyle tazele
+        $this->refreshIfStale('last_fixtures_fetch', 600, function () use ($date) {
+            (new MackolikScraper())->fetchFixtures($date);
+        });
 
         $sql = "SELECT m.*, l.name AS league_name, l.country AS league_country, l.priority AS league_priority,
                        ht.name AS home_name, ht.logo_url AS home_logo,
@@ -59,6 +82,39 @@ class MatchController
         ]);
     }
 
+    /** GET /matches/live — canlı maçlar (canlı oranlarla) */
+    public function live(Request $req): void
+    {
+        // Canlı veri hızlı bayatlar: 75 sn'de bir tazele (kullanıcı isteğiyle)
+        $this->refreshIfStale('last_live_fetch', 75, function () {
+            (new MackolikScraper())->fetchLive();
+        });
+
+        $tz = new \DateTimeZone(Config::get('app.timezone', 'Europe/Istanbul'));
+        $nowLocal = (new \DateTime('now', $tz));
+        // 4 saatten eski "canlı" kayıtları bitmiş say (takılı kalmasınlar)
+        Database::execute(
+            "UPDATE matches SET status='finished' WHERE status='live' AND start_time < ?",
+            [(clone $nowLocal)->modify('-4 hours')->format('Y-m-d H:i:s')]
+        );
+        // Canlı işaretli ve son 4 saat içinde başlamış maçlar
+        $rows = Database::fetchAll(
+            "SELECT m.*, l.name AS league_name, l.country AS league_country, l.priority AS league_priority,
+                    ht.name AS home_name, ht.logo_url AS home_logo,
+                    at.name AS away_name, at.logo_url AS away_logo,
+                    (SELECT COUNT(*) FROM analyses a WHERE a.match_id = m.id AND a.status='done') AS has_analysis
+             FROM matches m
+             LEFT JOIN leagues l ON l.id = m.league_id
+             LEFT JOIN teams ht ON ht.id = m.home_team_id
+             LEFT JOIN teams at ON at.id = m.away_team_id
+             WHERE m.status = 'live'
+               AND m.start_time >= ?
+             ORDER BY m.start_time ASC",
+            [$nowLocal->modify('-4 hours')->format('Y-m-d H:i:s')]
+        );
+        Response::ok(['matches' => array_map([$this, 'presentListItem'], $rows)]);
+    }
+
     /** GET /matches/{id} */
     public function show(Request $req): void
     {
@@ -88,10 +144,15 @@ class MatchController
             [$id]
         );
 
+        // Tüm marketler ayrı bir liste alanında döner (detay ekranı)
+        $markets = $stats['markets'] ?? [];
+        unset($stats['markets']);
+
         Response::ok([
             'match' => $this->presentDetail($row),
             // Boş dizi PHP'de JSON [] üretir; istemci Map beklediği için obje olarak gönder.
             'odds' => (object) $odds,
+            'markets' => array_values(is_array($markets) ? $markets : []),
             'stats' => (object) $stats,
             'analysis' => $analysis ? $this->presentAnalysis($analysis) : null,
         ]);

@@ -56,6 +56,8 @@ $router->post('/me/fcm', [$auth, 'updateFcm']);
 // ---- Maçlar / Ligler ----
 $router->get('/leagues', [$matches, 'leagues']);
 $router->get('/matches', [$matches, 'index']);
+// NOT: /matches/live, /matches/{id} kalıbından ÖNCE kayıtlı olmalı
+$router->get('/matches/live', [$matches, 'live']);
 $router->get('/matches/{id}', [$matches, 'show']);
 
 // ---- Analiz ----

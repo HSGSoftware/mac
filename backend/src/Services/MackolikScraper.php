@@ -8,22 +8,22 @@ use MacRadar\Core\Database;
 use MacRadar\Core\Settings;
 
 /**
- * İddaa bülteni + oran çekici.
+ * İddaa bülteni + oran çekici (Nesine getprebultenfull / canlı bülten).
  *
- * Birincil kaynak: Nesine public iddaa bülteni JSON'u
- *   https://bulten.nesine.com/api/bulten/getprebultenfull
- *   Yapı: { sg: { EA: [ {C, GT, HN, AN, LN, D, T, MA:[{N, OCA:[{N,O}]}]}, ... ] } }
- *     C  = iddaa/nesine kodu, GT = oyun türü (1=Futbol), HN/AN = ev/deplasman,
- *     LN = lig, D = tarih (gg.aa.yyyy), T = saat (SS:dd),
- *     MA = market listesi, her marketin OCA = seçenek listesi (N=ad, O=oran).
- *   Market eşleştirme isim tabanlıdır (kod değişse de çalışır).
+ * Yapı: sg.EA[] olayları; marketler MA/MSA dizisinde.
+ *   MTID=market tipi, MST=alt tip, NO=market numarası, SOV=çizgi,
+ *   OCA=[{N=sıra, O=oran, ON=opsiyonel seçenek adı}], MN=opsiyonel market adı.
  *
- * Yedekler: özel JSON uç, HTML/XPath. Her çekimde ham yanıtın başı scrape_logs'a
- * (job=bulten_debug) yazılır; yapı değişirse buradan doğrulanır.
+ * İki katman:
+ *  1) Kanonik oranlar (MS1/X/2, Alt/Üst, KG, ÇŞ, İY) -> odds tablosu (kartlar + AI)
+ *  2) TÜM marketler ham olarak -> match_stats(type='markets') JSON (detay ekranı)
+ * Market isimleri: MN > nsn sözlüğü > bilinen MTID adları > "Market #NO".
  */
 class MackolikScraper
 {
     private string $userAgent;
+    /** nsn'den çıkarılan MTID/NO -> isim haritası (istek başına) */
+    private array $nameMap = [];
 
     public function __construct()
     {
@@ -42,24 +42,25 @@ class MackolikScraper
         ];
     }
 
+    // ================== ÖN BÜLTEN ==================
+
     /**
-     * İddaa bültenini (tüm yaklaşan maçlar + oranlar) çeker ve DB'ye yazar.
-     * Nesine bülteni tarih bağımsız tüm programı döndürür; $date yalnızca yedekler için.
+     * İddaa ön bültenini (tüm yaklaşan maçlar + tüm oranlar) çeker ve DB'ye yazar.
      * @return array{count:int, source:string}
      */
     public function fetchFixtures(string $date): array
     {
         $dmy = date('d/m/Y', strtotime($date));
 
-        // 1) Birincil: Nesine iddaa bülteni
         $bultenUrl = (string) Settings::get('scraper_bulten_url', 'https://bulten.nesine.com/api/bulten/getprebultenfull');
-        $res = HttpClient::get($bultenUrl, $this->headers(), 40);
+        $res = HttpClient::get($bultenUrl, $this->headers(), 45);
         if ($res['status'] === 200 && $res['body']) {
             $data = json_decode($res['body'], true);
             if (is_array($data)) {
+                $this->nameMap = $this->extractNameMap($data['nsn'] ?? null);
                 $events = $this->findNesineEvents($data);
                 if (!empty($events)) {
-                    return ['count' => $this->ingestNesine($events), 'source' => 'nesine'];
+                    return ['count' => $this->ingestNesine($events, false), 'source' => 'nesine'];
                 }
             }
         } else {
@@ -67,13 +68,11 @@ class MackolikScraper
                 'Nesine erişimi başarısız: HTTP ' . $res['status'] . ($res['error'] ? ' ' . $res['error'] : ''), 0, null);
         }
 
-        // 2) İsteğe bağlı özel JSON uç
         $jsonUrl = Settings::get('scraper_fixtures_json_url');
         if ($jsonUrl) {
             $u = str_replace(['{date_dmy}', '{date}'], [$dmy, $date], $jsonUrl);
             $r = HttpClient::get($u, $this->headers(), 30);
             if ($r['status'] === 200 && $r['body']) {
-                ScrapeLogger::log('bulten_debug', 'success', 'Özel JSON ham yanıt (baş): ' . mb_substr($r['body'], 0, 1500), 0, null);
                 $d = json_decode($r['body'], true);
                 if (is_array($d)) {
                     return ['count' => $this->ingestFixturesJson($d), 'source' => 'json'];
@@ -81,27 +80,51 @@ class MackolikScraper
             }
         }
 
-        // 3) HTML yedek
-        $htmlUrlTpl = Settings::get('scraper_fixtures_html_url');
-        if ($htmlUrlTpl) {
-            $u = str_replace(['{date_dmy}', '{date}'], [$dmy, $date], $htmlUrlTpl);
-            $r = HttpClient::get($u, $this->headers(), 30);
-            if ($r['status'] === 200 && $r['body']) {
-                return ['count' => $this->ingestFixturesHtml($r['body'], $date), 'source' => 'html'];
-            }
-        }
-
-        throw new \RuntimeException('Bülten alınamadı (Nesine HTTP ' . $res['status'] . ($res['error'] ? ', ' . $res['error'] : '') . '). Scraper ayarlarından kaynağı kontrol edin.');
+        throw new \RuntimeException('Bülten alınamadı (Nesine HTTP ' . $res['status'] . ($res['error'] ? ', ' . $res['error'] : '') . ').');
     }
 
+    // ================== CANLI BÜLTEN ==================
+
     /**
-     * Teşhis: Nesine yanıtının yapısını döndürür (admin panelde gösterilir).
-     * İlk maçın tam JSON'u sayesinde market/oran alan adları doğrulanır.
+     * Canlı bülteni çeker: canlı maçlar + canlı oranlar.
+     * Uç adresi ayarlanabilir; varsayılan Nesine canlı bülten ucu.
+     * @return array{count:int, source:string}
      */
+    public function fetchLive(): array
+    {
+        $liveUrl = (string) Settings::get('scraper_live_url', 'https://bulten.nesine.com/api/bulten/getlivebultenfull');
+        $res = HttpClient::get($liveUrl, $this->headers(), 30);
+        if ($res['status'] !== 200 || !$res['body']) {
+            ScrapeLogger::log('live_debug', 'error',
+                'Canlı bülten alınamadı: HTTP ' . $res['status'] . ($res['error'] ? ' ' . $res['error'] : '') . ' — URL: ' . $liveUrl, 0, null);
+            return ['count' => 0, 'source' => 'none'];
+        }
+        $data = json_decode($res['body'], true);
+        if (!is_array($data)) {
+            ScrapeLogger::log('live_debug', 'error', 'Canlı bülten JSON çözülemedi. Baş: ' . mb_substr($res['body'], 0, 500), 0, null);
+            return ['count' => 0, 'source' => 'none'];
+        }
+        $this->nameMap = $this->extractNameMap($data['nsn'] ?? null);
+        $events = $this->findNesineEvents($data);
+        if (empty($events)) {
+            ScrapeLogger::log('live_debug', 'error', 'Canlı bültende olay bulunamadı. Üst anahtarlar: ' . implode(',', array_keys($data)), 0, null);
+            return ['count' => 0, 'source' => 'none'];
+        }
+        // İlk canlı olayın ham örneğini logla (skor/dakika alanlarını doğrulamak için)
+        ScrapeLogger::log('live_debug', 'success',
+            'İlk canlı olay: ' . mb_substr(json_encode($events[0], JSON_UNESCAPED_UNICODE), 0, 1700), 0, null);
+
+        $count = $this->ingestNesine($events, true);
+        return ['count' => $count, 'source' => 'nesine_live'];
+    }
+
+    // ================== TEŞHİS ==================
+
+    /** Teşhis: oranlı ilk futbol maçının market özetini + nsn örneğini döndürür. */
     public function debugSample(): array
     {
         $bultenUrl = (string) Settings::get('scraper_bulten_url', 'https://bulten.nesine.com/api/bulten/getprebultenfull');
-        $res = HttpClient::get($bultenUrl, $this->headers(), 40);
+        $res = HttpClient::get($bultenUrl, $this->headers(), 45);
         if ($res['status'] !== 200 || !$res['body']) {
             return ['error' => 'HTTP ' . $res['status'] . ' ' . ($res['error'] ?? ''), 'url' => $bultenUrl];
         }
@@ -109,28 +132,18 @@ class MackolikScraper
         if (!is_array($data)) {
             return ['error' => 'JSON çözülemedi', 'head' => mb_substr($res['body'], 0, 800)];
         }
+        $this->nameMap = $this->extractNameMap($data['nsn'] ?? null);
         $events = $this->findNesineEvents($data);
-        // Oranlı ilk futbol maçını seç (MA veya MSA dolu)
         $first = null;
         foreach ($events as $e) {
-            if (is_array($e) && (string) ($e['GT'] ?? '') === '1'
-                && (!empty($e['MA']) || !empty($e['MSA']))) {
+            if (is_array($e) && (string) ($e['GT'] ?? '') === '1' && (!empty($e['MA']) || !empty($e['MSA']))) {
                 $first = $e;
                 break;
             }
         }
         if ($first === null) {
-            foreach ($events as $e) {
-                if (is_array($e) && (string) ($e['GT'] ?? '') === '1') {
-                    $first = $e;
-                    break;
-                }
-            }
-        }
-        if ($first === null) {
             $first = $events[0] ?? null;
         }
-        // Market özeti: MTID -> (oran sayısı, SOV, ilk oranlar). MTID eşlemesi için.
         $summary = [];
         $allMarkets = array_merge(
             (is_array($first) && !empty($first['MA'])) ? $first['MA'] : [],
@@ -142,29 +155,27 @@ class MackolikScraper
             }
             $summary[] = [
                 'MTID' => $mk['MTID'] ?? null,
+                'NO' => $mk['NO'] ?? null,
                 'MST' => $mk['MST'] ?? null,
                 'SOV' => $mk['SOV'] ?? null,
-                'MN' => $mk['MN'] ?? null,
+                'ad' => $this->marketName($mk),
                 'oc' => count($mk['OCA'] ?? []),
-                'odds' => array_map(fn($o) => is_array($o) ? ($o['O'] ?? null) : null, array_slice($mk['OCA'] ?? [], 0, 4)),
             ];
         }
         return [
             'url' => $bultenUrl,
-            'top_keys' => array_keys($data),
-            'nsn' => $data['nsn'] ?? null,
             'event_count' => count($events),
+            'name_map_size' => count($this->nameMap),
+            'nsn_ornek' => is_array($data['nsn'] ?? null) ? array_slice($data['nsn'], 0, 5, true) : ($data['nsn'] ?? null),
             'first_event_teams' => is_array($first) ? (($first['HN'] ?? '') . ' - ' . ($first['AN'] ?? '')) : '',
-            'first_event_ma_count' => is_array($first) ? count($first['MA'] ?? []) : 0,
-            'first_event_msa_count' => is_array($first) ? count($first['MSA'] ?? []) : 0,
             'markets_summary' => $summary,
         ];
     }
 
-    /** Nesine yanıtında olay (event) dizisini bulur (yapı sürümüne dayanıklı). */
+    // ================== ÇEKİRDEK AYRIŞTIRMA ==================
+
     private function findNesineEvents(array $data): array
     {
-        // Bilinen konumlar
         $candidates = [
             $data['sg']['EA'] ?? null,
             $data['sg']['ea'] ?? null,
@@ -177,7 +188,6 @@ class MackolikScraper
                 return $c;
             }
         }
-        // Genel arama: içinde HN/AN olan ilk büyük diziyi bul
         $found = [];
         $walker = function ($node) use (&$walker, &$found) {
             if (!empty($found) || !is_array($node)) {
@@ -199,17 +209,102 @@ class MackolikScraper
     }
 
     /**
-     * Nesine event dizisini işler (futbol + oranlar).
+     * nsn sözlüğünden id -> isim haritası çıkarır (yapıdan bağımsız yürüyüş).
+     * İçinde sayısal bir kimlik ve string bir ad barındıran düğümleri toplar.
      */
-    private function ingestNesine(array $events): int
+    private function extractNameMap($nsn): array
+    {
+        if (!is_array($nsn)) {
+            return [];
+        }
+        $map = [];
+        $walker = function ($node, $key = null) use (&$walker, &$map) {
+            if (!is_array($node)) {
+                return;
+            }
+            // {MTID: x, N/MN/NAME: "..."} kalıbı
+            $id = $node['MTID'] ?? ($node['ID'] ?? ($node['NO'] ?? null));
+            $name = null;
+            foreach (['N', 'MN', 'NAME', 'Name', 'name', 'MTN'] as $f) {
+                if (isset($node[$f]) && is_string($node[$f]) && mb_strlen($node[$f]) > 1) {
+                    $name = $node[$f];
+                    break;
+                }
+            }
+            if ($id !== null && is_numeric((string) $id) && $name !== null) {
+                $map[(string) (int) $id] = $name;
+            }
+            // key => "isim" düz sözlük kalıbı (nsn: {"1":"Maç Sonucu",...})
+            foreach ($node as $k => $v) {
+                if (is_string($v) && is_numeric((string) $k) && mb_strlen($v) > 1) {
+                    $map[(string) (int) $k] = $v;
+                } elseif (is_array($v)) {
+                    $walker($v, $k);
+                }
+            }
+        };
+        $walker($nsn);
+        return $map;
+    }
+
+    /** Bilinen MTID adları (doğrulanmış/yaygın) — nsn bulunamazsa yedek. */
+    private const KNOWN_MTID_NAMES = [
+        1 => 'Maç Sonucu',
+    ];
+
+    private function marketName(array $m): string
+    {
+        $mn = trim((string) ($m['MN'] ?? ''));
+        if ($mn !== '') {
+            return $mn;
+        }
+        $mtid = isset($m['MTID']) ? (int) $m['MTID'] : 0;
+        $no = isset($m['NO']) ? (int) $m['NO'] : 0;
+        if ($mtid && isset($this->nameMap[(string) $mtid])) {
+            return $this->nameMap[(string) $mtid];
+        }
+        if ($no && isset($this->nameMap[(string) $no])) {
+            return $this->nameMap[(string) $no];
+        }
+        if (isset(self::KNOWN_MTID_NAMES[$mtid])) {
+            return self::KNOWN_MTID_NAMES[$mtid];
+        }
+        $mst = isset($m['MST']) ? (int) $m['MST'] : 0;
+        $sov = (float) str_replace(',', '.', (string) ($m['SOV'] ?? 0));
+        if ($mst === 101 && $sov > 0) {
+            return number_format($sov, 1, ',', '') . ' Gol Alt/Üst';
+        }
+        return 'Market #' . ($no ?: $mtid);
+    }
+
+    /** Seçenek etiketi: ON > bilinen kalıp > sıra numarası. */
+    private function outcomeLabel(array $m, array $o, int $idx, int $total): string
+    {
+        $on = trim((string) ($o['ON'] ?? ''));
+        if ($on !== '') {
+            return $on;
+        }
+        $mtid = isset($m['MTID']) ? (int) $m['MTID'] : 0;
+        $mst = isset($m['MST']) ? (int) $m['MST'] : 0;
+        if ($mtid === 1 && $total >= 3) {
+            return ['1', 'X', '2'][$idx] ?? (string) ($idx + 1);
+        }
+        if ($mst === 101 && $total === 2) {
+            return $idx === 0 ? 'Alt' : 'Üst';
+        }
+        return (string) ($o['N'] ?? ($idx + 1));
+    }
+
+    /**
+     * Nesine event dizisini işler. $isLive=true canlı bülten demektir.
+     */
+    private function ingestNesine(array $events, bool $isLive): int
     {
         $count = 0;
-        $logged = false;
         foreach ($events as $ev) {
             if (!is_array($ev)) {
                 continue;
             }
-            // Oyun türü: 1 = Futbol. Alan yoksa dahil et.
             $gt = $ev['GT'] ?? ($ev['gt'] ?? ($ev['TYPE'] ?? null));
             if ($gt !== null && (string) $gt !== '1') {
                 continue;
@@ -219,20 +314,14 @@ class MackolikScraper
             if ($home === '' || $away === '') {
                 continue;
             }
-            if (!$logged && (!empty($ev['MSA']) || !empty($ev['MA']))) {
-                ScrapeLogger::log('bulten_debug', 'success',
-                    'İlk oranlı maç (MA=' . count($ev['MA'] ?? []) . ' MSA=' . count($ev['MSA'] ?? []) . '): '
-                    . mb_substr(json_encode($ev, JSON_UNESCAPED_UNICODE), 0, 1700), 0, null);
-                $logged = true;
-            }
             $code = trim((string) ($ev['C'] ?? ($ev['c'] ?? '')));
             $leagueName = trim((string) ($ev['LN'] ?? ($ev['ln'] ?? 'Diğer'))) ?: 'Diğer';
             $dateStr = (string) ($ev['D'] ?? ($ev['d'] ?? ''));
             $timeStr = (string) ($ev['T'] ?? ($ev['t'] ?? ''));
 
-            $leagueId = $this->upsertLeague('', $leagueName, null);
-            $homeId = $this->upsertTeam('', $home);
-            $awayId = $this->upsertTeam('', $away);
+            $leagueId = $this->upsertLeague($leagueName);
+            $homeId = $this->upsertTeam($home);
+            $awayId = $this->upsertTeam($away);
 
             $matchId = $this->upsertMatch([
                 'mackolik_id' => $code !== '' ? 'nesine_' . $code : '',
@@ -242,26 +331,113 @@ class MackolikScraper
                 'iddaa_code' => ($code === '' || $code === '0') ? null : $code,
                 'start_time' => $this->composeDateTime($dateStr, $timeStr, date('Y-m-d')),
             ]);
+            if (!$matchId) {
+                continue;
+            }
 
-            if ($matchId) {
-                // Marketler bazı olaylarda MA, bazılarında MSA dizisinde; ikisini birleştir.
-                $ma = (isset($ev['MA']) && is_array($ev['MA'])) ? $ev['MA'] : [];
-                $msa = (isset($ev['MSA']) && is_array($ev['MSA'])) ? $ev['MSA'] : [];
-                $odds = $this->parseNesineMarkets(array_merge($ma, $msa));
-                if ($odds) {
-                    $this->saveOdds($matchId, $odds);
-                }
+            $ma = (isset($ev['MA']) && is_array($ev['MA'])) ? $ev['MA'] : [];
+            $msa = (isset($ev['MSA']) && is_array($ev['MSA'])) ? $ev['MSA'] : [];
+            $allMarkets = array_merge($ma, $msa);
+
+            // 1) Kanonik oranlar (kartlar + AI)
+            $odds = $this->parseNesineMarkets($allMarkets);
+            if ($odds) {
+                $this->saveOdds($matchId, $odds);
+            }
+
+            // 2) TÜM marketler (detay ekranı)
+            $this->saveAllMarkets($matchId, $allMarkets);
+
+            // 3) Canlı durum: skor/dakika alanlarını yakala
+            if ($isLive) {
+                $this->applyLiveState($matchId, $ev);
             }
             $count++;
         }
         return $count;
     }
 
-    /**
-     * Nesine MSA market listesini market koduna eşler.
-     * Market adı = MN, seçenek adı = ON, seçenek sırası = N, oran = O, gol çizgisi = SOV.
-     * İsim + pozisyon tabanlı; dayanıklı.
-     */
+    /** Canlı olaydan skor/dakika bilgisini esnek alan adlarıyla yakalar. */
+    private function applyLiveState(int $matchId, array $ev): void
+    {
+        $minute = null;
+        foreach (['MIN', 'M', 'MINUTE', 'LT', 'ST'] as $f) {
+            if (isset($ev[$f]) && $ev[$f] !== '' && !is_array($ev[$f])) {
+                $minute = (string) $ev[$f];
+                break;
+            }
+        }
+        $hs = null;
+        $as = null;
+        // Yaygın kalıplar: SC:{HS,AS} veya HS/AS ya da S:"1-0"
+        if (isset($ev['SC']) && is_array($ev['SC'])) {
+            $hs = $this->intOrNull($ev['SC']['HS'] ?? ($ev['SC']['H'] ?? null));
+            $as = $this->intOrNull($ev['SC']['AS'] ?? ($ev['SC']['A'] ?? null));
+        }
+        if ($hs === null && isset($ev['HS'])) {
+            $hs = $this->intOrNull($ev['HS']);
+            $as = $this->intOrNull($ev['AS'] ?? null);
+        }
+        if ($hs === null && isset($ev['S']) && is_string($ev['S']) && preg_match('/^(\d+)\s*-\s*(\d+)/', $ev['S'], $mm)) {
+            $hs = (int) $mm[1];
+            $as = (int) $mm[2];
+        }
+
+        Database::execute(
+            'UPDATE matches SET status = ?, minute = ?, ms_home = COALESCE(?, ms_home), ms_away = COALESCE(?, ms_away) WHERE id = ?',
+            ['live', $minute !== null ? mb_substr($minute, 0, 16) : null, $hs, $as, $matchId]
+        );
+    }
+
+    /** Tüm marketleri isim + seçenek etiketleriyle match_stats(type=markets)'a yazar. */
+    private function saveAllMarkets(int $matchId, array $markets): void
+    {
+        $outList = [];
+        foreach ($markets as $m) {
+            if (!is_array($m)) {
+                continue;
+            }
+            $oca = $m['OCA'] ?? [];
+            if (!is_array($oca) || empty($oca)) {
+                continue;
+            }
+            $total = count($oca);
+            $outcomes = [];
+            $i = 0;
+            foreach ($oca as $o) {
+                if (!is_array($o)) {
+                    continue;
+                }
+                $odd = $this->num((string) ($o['O'] ?? ''));
+                if ($odd === null || $odd <= 1.001) { // 1.00 = oynanmıyor
+                    $i++;
+                    continue;
+                }
+                $outcomes[] = [
+                    'ad' => $this->outcomeLabel($m, $o, $i, $total),
+                    'oran' => round($odd, 2),
+                ];
+                $i++;
+            }
+            if (empty($outcomes)) {
+                continue;
+            }
+            $sov = (float) str_replace(',', '.', (string) ($m['SOV'] ?? 0));
+            $outList[] = [
+                'ad' => $this->marketName($m),
+                'mtid' => (int) ($m['MTID'] ?? 0),
+                'no' => (int) ($m['NO'] ?? 0),
+                'sov' => $sov > 0 ? $sov : null,
+                'secenekler' => $outcomes,
+            ];
+        }
+        if (empty($outList)) {
+            return;
+        }
+        $this->saveStats($matchId, 'markets', $outList);
+    }
+
+    /** Kanonik market ayrıştırma (MTID/MST + isim yedekli). */
     private function parseNesineMarkets(array $markets): array
     {
         $out = [];
@@ -269,58 +445,37 @@ class MackolikScraper
             if (!is_array($m)) {
                 continue;
             }
-            $mn = mb_strtolower(trim((string) ($m['MN'] ?? ($m['N'] ?? ''))), 'UTF-8');
+            $mn = mb_strtolower(trim((string) ($m['MN'] ?? '')), 'UTF-8');
             $sov = $m['SOV'] ?? 0;
-            $oca = $m['OCA'] ?? ($m['oca'] ?? []);
+            $oca = $m['OCA'] ?? [];
             if (!is_array($oca) || empty($oca)) {
                 continue;
             }
-
-            // Seçenekleri hem ada (ON) hem pozisyona (N) göre indeksle
-            $byName = [];
             $byPos = [];
             foreach ($oca as $o) {
                 if (!is_array($o)) {
                     continue;
                 }
-                $odd = $this->num((string) ($o['O'] ?? ($o['odd'] ?? '')));
-                if ($odd === null) {
-                    continue;
-                }
-                $on = mb_strtolower(trim((string) ($o['ON'] ?? '')), 'UTF-8');
-                if ($on !== '') {
-                    $byName[$on] = $odd;
-                }
-                if (isset($o['N'])) {
+                $odd = $this->num((string) ($o['O'] ?? ''));
+                if ($odd !== null && isset($o['N'])) {
                     $byPos[(string) $o['N']] = $odd;
                 }
             }
-            if (empty($byName) && empty($byPos)) {
+            if (empty($byPos)) {
                 continue;
             }
-            $nm = function (array $keys) use ($byName) {
-                foreach ($keys as $k) {
-                    if (isset($byName[$k])) {
-                        return $byName[$k];
-                    }
-                }
-                return null;
-            };
             $pos = fn($p) => $byPos[(string) $p] ?? null;
             $mtid = isset($m['MTID']) ? (int) $m['MTID'] : 0;
             $mst = isset($m['MST']) ? (int) $m['MST'] : 0;
             $cnt = count($byPos);
 
-            // ---- MTID/MST tabanlı (Nesine'de çoğu markette isim/ON alanı yok) ----
-            // MTID=1: Maç Sonucu (1-X-2) — doğrulandı
-            if ($mtid === 1 && $cnt >= 3) {
+            if ($mtid === 1 && $cnt >= 3) { // Maç Sonucu
                 $this->put($out, 'MS1', $pos(1));
                 $this->put($out, 'MSX', $pos(2));
                 $this->put($out, 'MS2', $pos(3));
                 continue;
             }
-            // MST=101: Gol Alt/Üst ailesi (SOV=çizgi; N1=Alt, N2=Üst) — doğrulandı
-            if ($mst === 101 && $cnt === 2) {
+            if ($mst === 101 && $cnt === 2) { // Gol Alt/Üst ailesi
                 $ln = $this->goalLine($sov, '');
                 if ($ln !== null) {
                     $this->put($out, 'ALT' . $ln, $pos(1));
@@ -328,70 +483,28 @@ class MackolikScraper
                 }
                 continue;
             }
-            // Ayarlanabilir MTID eşlemesi (nsn sözlüğünden doğrulanıp settings'e girilebilir)
-            $mtidKg = (int) Settings::get('mk_mtid_kg', 0);
-            $mtidCs = (int) Settings::get('mk_mtid_cs', 0);
-            $mtidIy = (int) Settings::get('mk_mtid_iy', 0);
-            if ($mtidKg && $mtid === $mtidKg && $cnt === 2) {
-                $this->put($out, 'KGVAR', $pos(1));
-                $this->put($out, 'KGYOK', $pos(2));
+            // İsimden yakala (nsn haritası isim verirse)
+            $resolved = mb_strtolower($this->marketName($m), 'UTF-8');
+            $name = $mn !== '' ? $mn : $resolved;
+            if ($name === '') {
                 continue;
             }
-            if ($mtidCs && $mtid === $mtidCs && $cnt === 3) {
+            if ((strpos($name, 'karşılıklı') !== false || strpos($name, 'karsilikli') !== false) && $cnt === 2) {
+                $this->put($out, 'KGVAR', $pos(1));
+                $this->put($out, 'KGYOK', $pos(2));
+            } elseif ((strpos($name, 'çifte') !== false || strpos($name, 'cifte') !== false) && $cnt === 3) {
                 $this->put($out, 'CS1X', $pos(1));
                 $this->put($out, 'CS12', $pos(2));
                 $this->put($out, 'CSX2', $pos(3));
-                continue;
-            }
-            if ($mtidIy && $mtid === $mtidIy && $cnt === 3) {
+            } elseif ((strpos($name, 'ilk yarı sonucu') !== false || strpos($name, 'i̇lk yarı sonucu') !== false) && $cnt === 3) {
                 $this->put($out, 'IY1', $pos(1));
                 $this->put($out, 'IYX', $pos(2));
                 $this->put($out, 'IY2', $pos(3));
-                continue;
-            }
-
-            // ---- İsim (MN) tabanlı (MN varsa) ----
-            if ($mn === '') {
-                continue;
-            }
-            $isMs = strpos($mn, 'maç sonucu') !== false || strpos($mn, 'mac sonucu') !== false;
-            $isIy = (strpos($mn, 'ilk yarı') !== false || strpos($mn, 'i̇lk yarı') !== false || strpos($mn, '1. yarı') !== false)
-                && strpos($mn, 'sonuc') !== false;
-            $isCs = strpos($mn, 'çifte') !== false || strpos($mn, 'cifte') !== false;
-            $isKg = strpos($mn, 'karşılıklı') !== false || strpos($mn, 'karsilikli') !== false;
-            $isAu = (strpos($mn, 'alt') !== false && (strpos($mn, 'üst') !== false || strpos($mn, 'ust') !== false))
-                || strpos($mn, 'alt/üst') !== false
-                || (strpos($mn, 'gol') !== false && strpos($mn, 'toplam') === false && count($oca) === 2);
-
-            if ($isIy) {
-                $this->put($out, 'IY1', $nm(['1']) ?? $pos(1));
-                $this->put($out, 'IYX', $nm(['0', 'x']) ?? $pos(2));
-                $this->put($out, 'IY2', $nm(['2']) ?? $pos(3));
-            } elseif ($isCs) {
-                $this->put($out, 'CS1X', $nm(['1-x', '1 veya x', '1 ve x', '1x']) ?? $pos(1));
-                $this->put($out, 'CS12', $nm(['1-2', '1 veya 2', '12']) ?? $pos(2));
-                $this->put($out, 'CSX2', $nm(['x-2', 'x veya 2', 'x2']) ?? $pos(3));
-            } elseif ($isMs) {
-                $this->put($out, 'MS1', $nm(['1']) ?? $pos(1));
-                $this->put($out, 'MSX', $nm(['0', 'x']) ?? $pos(2));
-                $this->put($out, 'MS2', $nm(['2']) ?? $pos(3));
-            } elseif ($isKg) {
-                $this->put($out, 'KGVAR', $nm(['var', 'evet', 'e']) ?? $pos(1));
-                $this->put($out, 'KGYOK', $nm(['yok', 'hayır', 'hayir', 'h']) ?? $pos(2));
-            } elseif ($isAu) {
-                $alt = $nm(['alt', 'a', 'under']) ?? $pos(1);
-                $ust = $nm(['üst', 'ust', 'ü', 'u', 'over']) ?? $pos(2);
-                $line = $this->goalLine($sov, $mn);
-                if ($line !== null) {
-                    $this->put($out, 'ALT' . $line, $alt);
-                    $this->put($out, 'UST' . $line, $ust);
-                }
             }
         }
         return $out;
     }
 
-    /** SOV veya market adından gol çizgisini bulur: 1.5->'15', 2.5->'25', 3.5->'35'. */
     private function goalLine($sov, string $mn): ?string
     {
         $val = (float) str_replace(',', '.', (string) $sov);
@@ -408,10 +521,17 @@ class MackolikScraper
 
     private function put(array &$arr, string $key, $val): void
     {
-        // Oran 1.00 = "oynanmıyor" (placeholder); gerçek oranlar > 1.00
         if ($val !== null && (float) $val > 1.001) {
             $arr[$key] = round((float) $val, 2);
         }
+    }
+
+    private function intOrNull($v): ?int
+    {
+        if ($v === null || $v === '' || is_array($v) || !is_numeric((string) $v)) {
+            return null;
+        }
+        return (int) $v;
     }
 
     private function composeDateTime(string $dateStr, string $timeStr, string $fallbackYmd): string
@@ -427,9 +547,7 @@ class MackolikScraper
         return $ymd . ' ' . $time . ':00';
     }
 
-    /**
-     * Genel JSON feed (esnek yapı) — özel uç için.
-     */
+    /** Genel JSON feed (özel yedek uç). */
     private function ingestFixturesJson(array $data): int
     {
         $items = $data['matches'] ?? $data['data'] ?? $data;
@@ -438,13 +556,9 @@ class MackolikScraper
             if (!is_array($it)) {
                 continue;
             }
-            $leagueId = $this->upsertLeague(
-                (string) ($it['league']['id'] ?? ($it['league_id'] ?? '')),
-                (string) ($it['league']['name'] ?? ($it['league_name'] ?? 'Diğer')),
-                $it['league']['country'] ?? ($it['country'] ?? null)
-            );
-            $homeId = $this->upsertTeam((string) ($it['home']['id'] ?? ''), (string) ($it['home']['name'] ?? ($it['home'] ?? '')));
-            $awayId = $this->upsertTeam((string) ($it['away']['id'] ?? ''), (string) ($it['away']['name'] ?? ($it['away'] ?? '')));
+            $leagueId = $this->upsertLeague((string) ($it['league']['name'] ?? ($it['league_name'] ?? 'Diğer')));
+            $homeId = $this->upsertTeam((string) ($it['home']['name'] ?? ($it['home'] ?? '')));
+            $awayId = $this->upsertTeam((string) ($it['away']['name'] ?? ($it['away'] ?? '')));
             $matchId = $this->upsertMatch([
                 'mackolik_id' => (string) ($it['id'] ?? ''),
                 'league_id' => $leagueId,
@@ -461,63 +575,7 @@ class MackolikScraper
         return $count;
     }
 
-    /**
-     * HTML program tablosunu XPath ile ayrıştırır (son çare).
-     */
-    private function ingestFixturesHtml(string $html, string $date): int
-    {
-        $rowXpath = Settings::get('xpath_fixture_row', "//table//tr[contains(@class,'match')]");
-        $doc = new DOMDocument();
-        libxml_use_internal_errors(true);
-        $doc->loadHTML('<?xml encoding="utf-8" ?>' . $html);
-        libxml_clear_errors();
-        $xp = new DOMXPath($doc);
-        $rows = $xp->query($rowXpath);
-        if ($rows === false || $rows->length === 0) {
-            return 0;
-        }
-        $count = 0;
-        foreach ($rows as $row) {
-            $get = function (string $key, string $default) use ($xp, $row) {
-                $sel = Settings::get($key, $default);
-                $node = $xp->query($sel, $row);
-                return ($node && $node->length) ? trim($node->item(0)->textContent) : '';
-            };
-            $home = $get('xpath_home', ".//*[contains(@class,'home')]");
-            $away = $get('xpath_away', ".//*[contains(@class,'away')]");
-            if ($home === '' || $away === '') {
-                continue;
-            }
-            $time = $get('xpath_time', ".//*[contains(@class,'time')]");
-            $homeId = $this->upsertTeam('', $home);
-            $awayId = $this->upsertTeam('', $away);
-            $leagueId = $this->upsertLeague('', 'Diğer', null);
-            $matchId = $this->upsertMatch([
-                'mackolik_id' => '',
-                'league_id' => $leagueId,
-                'home_team_id' => $homeId,
-                'away_team_id' => $awayId,
-                'iddaa_code' => null,
-                'start_time' => $date . ' ' . ($time ?: '00:00') . ':00',
-            ]);
-            if ($matchId) {
-                $odds = array_filter([
-                    'MS1' => $this->num($get('xpath_ms1', ".//*[contains(@class,'odd-1')]")),
-                    'MSX' => $this->num($get('xpath_msx', ".//*[contains(@class,'odd-x')]")),
-                    'MS2' => $this->num($get('xpath_ms2', ".//*[contains(@class,'odd-2')]")),
-                ], fn($v) => $v !== null);
-                if ($odds) {
-                    $this->saveOdds($matchId, $odds);
-                }
-            }
-            $count++;
-        }
-        return $count;
-    }
-
-    /**
-     * Tek bir maçın analiz istatistiklerini çeker (opsiyonel uç tanımlıysa).
-     */
+    /** Maç istatistikleri (opsiyonel uç). */
     public function fetchMatchStats(int $matchId): void
     {
         $match = Database::fetch('SELECT * FROM matches WHERE id = ?', [$matchId]);
@@ -544,10 +602,7 @@ class MackolikScraper
         }
     }
 
-    /**
-     * Sonuç/skor güncelleme — Nesine ön-bülten skor içermez; opsiyonel sonuç ucu tanımlıysa kullanılır.
-     * @return array{count:int, source:string}
-     */
+    /** Sonuç/skor güncelleme (opsiyonel uç). */
     public function fetchResults(string $date): array
     {
         $resUrl = Settings::get('scraper_results_json_url');
@@ -578,24 +633,17 @@ class MackolikScraper
 
     // ---------- DB upsert yardımcıları ----------
 
-    private function upsertLeague(string $mackolikId, string $name, ?string $country): ?int
+    private function upsertLeague(string $name): ?int
     {
         $name = trim($name) ?: 'Diğer';
-        if ($mackolikId !== '') {
-            $row = Database::fetch('SELECT id FROM leagues WHERE mackolik_id = ?', [$mackolikId]);
-            if ($row) {
-                return (int) $row['id'];
-            }
-            return Database::insert('INSERT INTO leagues (mackolik_id, name, country) VALUES (?, ?, ?)', [$mackolikId, $name, $country]);
-        }
         $row = Database::fetch('SELECT id FROM leagues WHERE name = ? LIMIT 1', [$name]);
         if ($row) {
             return (int) $row['id'];
         }
-        return Database::insert('INSERT INTO leagues (name, country) VALUES (?, ?)', [$name, $country]);
+        return Database::insert('INSERT INTO leagues (name) VALUES (?)', [$name]);
     }
 
-    private function upsertTeam(string $mackolikId, string $name): ?int
+    private function upsertTeam(string $name): ?int
     {
         $name = trim($name);
         if ($name === '') {

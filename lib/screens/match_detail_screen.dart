@@ -40,7 +40,7 @@ class MatchDetailScreen extends ConsumerWidget {
                 Expanded(
                   child: TabBarView(
                     children: [
-                      _OddsTab(odds: d.odds),
+                      _OddsTab(odds: d.odds, markets: d.markets),
                       AnalysisTab(matchId: matchId, hasAnalysis: d.analysis != null),
                     ],
                   ),
@@ -101,11 +101,13 @@ class MatchDetailScreen extends ConsumerWidget {
 
 class _OddsTab extends StatelessWidget {
   final Map<String, double> odds;
-  const _OddsTab({required this.odds});
+  final List<BetMarket> markets;
+  const _OddsTab({required this.odds, required this.markets});
 
   static const _groups = [
     ['Maç Sonucu', ['MS1', 'MSX', 'MS2'], ['1', 'X', '2']],
     ['Çifte Şans', ['CS1X', 'CS12', 'CSX2'], ['1-X', '1-2', 'X-2']],
+    ['İlk Yarı Sonucu', ['IY1', 'IYX', 'IY2'], ['1', 'X', '2']],
     ['2.5 Gol', ['ALT25', 'UST25'], ['Alt', 'Üst']],
     ['1.5 Gol', ['ALT15', 'UST15'], ['Alt', 'Üst']],
     ['3.5 Gol', ['ALT35', 'UST35'], ['Alt', 'Üst']],
@@ -114,22 +116,16 @@ class _OddsTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (odds.isEmpty) {
+    if (odds.isEmpty && markets.isEmpty) {
       return const _EmptyOdds();
     }
+    // Öne çıkan (kanonik) marketler
     final sections = <Widget>[];
     for (final g in _groups) {
       final keys = g[1] as List<String>;
       final labels = g[2] as List<String>;
       if (!keys.any((k) => odds.containsKey(k))) continue;
-      sections.add(Padding(
-        padding: const EdgeInsets.fromLTRB(4, 14, 4, 8),
-        child: Text(g[0] as String,
-            style: const TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 13,
-                color: AppColors.accent)),
-      ));
+      sections.add(_sectionTitle(g[0] as String));
       sections.add(Row(
         children: [
           for (var i = 0; i < keys.length; i++) ...[
@@ -146,12 +142,75 @@ class _OddsTab extends StatelessWidget {
           children: const [
             Icon(Icons.bolt, size: 16, color: AppColors.warning),
             SizedBox(width: 6),
-            Text('Güncel İddaa Oranları',
+            Text('Öne Çıkan Oranlar',
                 style: TextStyle(fontWeight: FontWeight.bold)),
           ],
         ),
         ...sections,
+        if (markets.isNotEmpty) ...[
+          const SizedBox(height: 20),
+          Row(
+            children: [
+              const Icon(Icons.grid_view_rounded,
+                  size: 16, color: AppColors.accent),
+              const SizedBox(width: 6),
+              Text('Tüm Marketler (${markets.length})',
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
+            ],
+          ),
+          const SizedBox(height: 4),
+          ...markets.map((m) => _MarketCardAll(market: m)),
+        ],
+        const SizedBox(height: 12),
       ],
+    );
+  }
+
+  Widget _sectionTitle(String t) => Padding(
+        padding: const EdgeInsets.fromLTRB(4, 14, 4, 8),
+        child: Text(t,
+            style: const TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 13,
+                color: AppColors.accent)),
+      );
+}
+
+/// "Tüm Marketler" listesinde tek market kartı: ad + seçenek kutuları.
+class _MarketCardAll extends StatelessWidget {
+  final BetMarket market;
+  const _MarketCardAll({required this.market});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 5),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.surface2),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(market.name,
+              style:
+                  const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 7,
+            runSpacing: 7,
+            children: market.outcomes
+                .map((o) => ConstrainedBox(
+                      constraints: const BoxConstraints(minWidth: 74),
+                      child: OddsBox(
+                          label: o.label, value: o.odd, compact: true),
+                    ))
+                .toList(),
+          ),
+        ],
+      ),
     );
   }
 }
