@@ -110,13 +110,21 @@ class MackolikScraper
             return ['error' => 'JSON çözülemedi', 'head' => mb_substr($res['body'], 0, 800)];
         }
         $events = $this->findNesineEvents($data);
-        // Oran yapısını göstermek için oranlı ilk futbol maçını seç
+        // Oranlı ilk futbol maçını seç (MA veya MSA dolu)
         $first = null;
         foreach ($events as $e) {
             if (is_array($e) && (string) ($e['GT'] ?? '') === '1'
-                && !empty($e['MSA']) && is_array($e['MSA'])) {
+                && (!empty($e['MA']) || !empty($e['MSA']))) {
                 $first = $e;
                 break;
+            }
+        }
+        if ($first === null) {
+            foreach ($events as $e) {
+                if (is_array($e) && (string) ($e['GT'] ?? '') === '1') {
+                    $first = $e;
+                    break;
+                }
             }
         }
         if ($first === null) {
@@ -127,6 +135,8 @@ class MackolikScraper
             'top_keys' => array_keys($data),
             'event_count' => count($events),
             'first_event_keys' => is_array($first) ? array_keys($first) : [],
+            'first_event_ma_count' => is_array($first) ? count($first['MA'] ?? []) : 0,
+            'first_event_msa_count' => is_array($first) ? count($first['MSA'] ?? []) : 0,
             'first_event' => $first,
         ];
     }
@@ -189,9 +199,10 @@ class MackolikScraper
             if ($home === '' || $away === '') {
                 continue;
             }
-            if (!$logged && !empty($ev['MSA'])) {
+            if (!$logged && (!empty($ev['MSA']) || !empty($ev['MA']))) {
                 ScrapeLogger::log('bulten_debug', 'success',
-                    'İlk oranlı maç örneği: ' . mb_substr(json_encode($ev, JSON_UNESCAPED_UNICODE), 0, 1800), 0, null);
+                    'İlk oranlı maç (MA=' . count($ev['MA'] ?? []) . ' MSA=' . count($ev['MSA'] ?? []) . '): '
+                    . mb_substr(json_encode($ev, JSON_UNESCAPED_UNICODE), 0, 1700), 0, null);
                 $logged = true;
             }
             $code = trim((string) ($ev['C'] ?? ($ev['c'] ?? '')));
@@ -213,9 +224,10 @@ class MackolikScraper
             ]);
 
             if ($matchId) {
-                // Marketler MSA dizisinde (MA çoğunlukla boş gelir)
-                $markets = $ev['MSA'] ?? ($ev['msa'] ?? ($ev['MA'] ?? []));
-                $odds = $this->parseNesineMarkets(is_array($markets) ? $markets : []);
+                // Marketler bazı olaylarda MA, bazılarında MSA dizisinde; ikisini birleştir.
+                $ma = (isset($ev['MA']) && is_array($ev['MA'])) ? $ev['MA'] : [];
+                $msa = (isset($ev['MSA']) && is_array($ev['MSA'])) ? $ev['MSA'] : [];
+                $odds = $this->parseNesineMarkets(array_merge($ma, $msa));
                 if ($odds) {
                     $this->saveOdds($matchId, $odds);
                 }
