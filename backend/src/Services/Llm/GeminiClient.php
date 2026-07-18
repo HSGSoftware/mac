@@ -24,15 +24,21 @@ class GeminiClient implements LlmClientInterface
             throw new \RuntimeException('Gemini API anahtarı tanımlı değil.');
         }
         $url = "https://generativelanguage.googleapis.com/v1beta/models/{$this->model}:generateContent?key=" . urlencode($this->apiKey);
+        $generationConfig = [
+            'temperature' => 0.4,
+            'responseMimeType' => 'application/json',
+            // Tüm marketlerin analizi uzun JSON üretir; kesilmesin
+            'maxOutputTokens' => 8192,
+        ];
+        // Gemini 2.5 modellerinde "düşünme" varsayılan açık ve yanıtı ciddi yavaşlatır;
+        // yapılandırılmış analiz için gereksiz — kapat. (Eski modeller bu alanı kabul etmez.)
+        if (str_contains($this->model, '2.5')) {
+            $generationConfig['thinkingConfig'] = ['thinkingBudget' => 0];
+        }
         $payload = [
             'systemInstruction' => ['parts' => [['text' => $systemPrompt]]],
             'contents' => [['role' => 'user', 'parts' => [['text' => $userPrompt]]]],
-            'generationConfig' => [
-                'temperature' => 0.4,
-                'responseMimeType' => 'application/json',
-                // Tüm marketlerin analizi uzun JSON üretir; kesilmesin
-                'maxOutputTokens' => 8192,
-            ],
+            'generationConfig' => $generationConfig,
         ];
         $res = HttpClient::postJson($url, $payload, [], 90);
         if ($res['status'] !== 200) {
