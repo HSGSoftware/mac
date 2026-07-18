@@ -7,8 +7,8 @@ workflows:
       flutter: stable
       java: 17
       vars:
-        # Canlı backend adresiniz. Codemagic > Environment variables'tan da geçebilirsiniz.
-        API_BASE_URL: "https://alanadiniz.com/api/v1"
+        # Canlı backend adresi. Codemagic > Environment variables'tan da değiştirebilirsiniz.
+        API_BASE_URL: "https://webdigistore.com/macradar/api/v1"
       # İMZALAMA (opsiyonel): Play Store'a yükleyecekseniz Codemagic'te bir değişken
       # grubu (ör. "android_keystore") oluşturup şu değişkenleri ekleyin:
       #   CM_KEYSTORE_PATH, CM_KEY_ALIAS, CM_KEYSTORE_PASSWORD, CM_KEY_PASSWORD
@@ -19,17 +19,11 @@ workflows:
     scripts:
       - name: Flutter sürümü
         script: flutter --version
-      - name: Gradle wrapper'ı garanti et
-        script: |
-          cd android
-          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
-            gradle wrapper --gradle-version 8.4
-          fi
       - name: Bağımlılıklar
         script: flutter pub get
-      - name: Statik analiz
+      - name: Statik analiz (build'i durdurmaz)
         script: flutter analyze || true
-      - name: key.properties oluştur (imza varsa)
+      - name: key.properties oluştur (imza tanımlıysa)
         script: |
           if [ -n "$CM_KEYSTORE_PATH" ]; then
             cat > android/key.properties <<EOF
@@ -38,11 +32,14 @@ workflows:
           keyAlias=$CM_KEY_ALIAS
           storeFile=$CM_KEYSTORE_PATH
           EOF
+            echo "key.properties oluşturuldu (release imzası kullanılacak)."
+          else
+            echo "Keystore tanımlı değil; release APK debug anahtarıyla imzalanacak (test build)."
           fi
-      - name: APK derle
-        script: flutter build apk --release --dart-define=API_BASE_URL=$API_BASE_URL
-      - name: App Bundle (AAB) derle
-        script: flutter build appbundle --release --dart-define=API_BASE_URL=$API_BASE_URL
+      - name: APK derle (release)
+        script: flutter build apk --release --dart-define=API_BASE_URL="$API_BASE_URL"
+      - name: App Bundle derle (AAB - Play Store)
+        script: flutter build appbundle --release --dart-define=API_BASE_URL="$API_BASE_URL"
     artifacts:
       - app/build/app/outputs/flutter-apk/*.apk
       - app/build/app/outputs/bundle/release/*.aab

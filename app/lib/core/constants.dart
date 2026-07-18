@@ -5,7 +5,7 @@ class AppConfig {
   ///   flutter build apk --dart-define=API_BASE_URL=https://alanadiniz.com/api/v1
   static const String apiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'https://alanadiniz.com/api/v1',
+    defaultValue: 'https://webdigistore.com/macradar/api/v1',
   );
 }
 

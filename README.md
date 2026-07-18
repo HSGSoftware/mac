@@ -70,7 +70,7 @@ mac/
 3. **Yapılandırma:** `config/config.example.php`'yi `config/config.php` olarak kopyalayın; DB bilgileri ve rastgele bir `jwt.secret` girin (`bin2hex(random_bytes(32))`).
 4. **Kurulum:** Tarayıcıdan `https://alanadiniz.com/install.php` açın — şema yüklenir. **Sonra `install.php`'yi silin.**
 5. **Admin paneli:** `https://alanadiniz.com/admin/` — varsayılan `admin` / `admin123`. Girer girmez **Genel Ayarlar > şifre** değiştirin.
-6. **Sağlık kontrolü:** `https://alanadiniz.com/api/v1/health` → `{"success":true,...}` dönmeli.
+6. **Sağlık kontrolü:** `https://webdigistore.com/macradar/api/v1/health` → `{"success":true,...}` dönmeli.
 
 ## Cron job'ları
 
@@ -101,7 +101,7 @@ Manuel test: Admin > Scraper > "Bugünü şimdi çek" veya Admin > Maçlar > "Bu
 ```bash
 cd app
 flutter pub get
-flutter run --dart-define=API_BASE_URL=https://alanadiniz.com/api/v1
+flutter run --dart-define=API_BASE_URL=https://webdigistore.com/macradar/api/v1
 ```
 
 - API adresi `--dart-define=API_BASE_URL=...` ile geçilir (varsayılan `lib/core/constants.dart`).
