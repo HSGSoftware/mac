@@ -15,7 +15,8 @@ class CouponScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final premium = ref.watch(authProvider).user?.isPremium ?? false;
+    // Günün Kuponu yalnızca Altın (3) pakette
+    final unlocked = (ref.watch(authProvider).user?.tier ?? 0) >= 3;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -27,7 +28,7 @@ class CouponScreen extends ConsumerWidget {
         ),
         const SizedBox(height: 10),
         Expanded(
-          child: premium ? _premiumBody(context, ref) : _freeBody(context),
+          child: unlocked ? _premiumBody(context, ref) : _freeBody(context),
         ),
       ],
     );
@@ -55,7 +56,7 @@ class CouponScreen extends ConsumerWidget {
                 children: [
                   const Icon(Icons.lock_outline, color: AppColors.gold, size: 20),
                   const SizedBox(width: 9),
-                  Text("Günün kuponu Premium'da",
+                  Text('Günün kuponu Altın pakette',
                       style: AppText.sans(
                           size: 13.5,
                           weight: FontWeight.w800,
@@ -64,7 +65,7 @@ class CouponScreen extends ConsumerWidget {
               ),
               const SizedBox(height: 10),
               Text(
-                  'Modelin seçimleri, gerekçeleri ve kombine olasılık hesabı Premium üyelere açık.',
+                  'Modelin seçimleri, gerekçeleri ve kombine olasılık hesabı Altın paket üyelerine açık.',
                   style: AppText.sans(
                       size: 12,
                       weight: FontWeight.w500,
@@ -76,8 +77,8 @@ class CouponScreen extends ConsumerWidget {
                   style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.gold,
                       foregroundColor: const Color(0xFF2A2008)),
-                  onPressed: () => showPaywall(context),
-                  child: const Text("Premium'a geç"),
+                  onPressed: () => showPaywall(context, highlightTier: 3),
+                  child: const Text("Altın pakete geç"),
                 ),
               ),
             ],
@@ -94,6 +95,10 @@ class CouponScreen extends ConsumerWidget {
           const Center(child: CircularProgressIndicator(color: AppColors.primary)),
       error: (e, _) => Center(child: Text('Hata: $e')),
       data: (c) {
+        if (c.locked) {
+          // Sunucu tarafı kilit (paket durumu değişmiş olabilir)
+          return _freeBody(context);
+        }
         if (c.picks.isEmpty) {
           return Center(
             child: Padding(

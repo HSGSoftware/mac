@@ -39,6 +39,63 @@ const Map<String, String> msShort = {
   'MS2': '2',
 };
 
+// ---------------- Market grupları ve paketler ----------------
+
+/// Paket adları (kademe sırasına göre).
+const List<String> tierNames = ['Ücretsiz', 'Bronz', 'Gümüş', 'Altın'];
+
+/// Bir market grubu tanımı: hangi pakette açılır.
+class MarketGroupDef {
+  final String key;
+  final String name;
+  final int tier; // bu grubu görebilmek için gereken minimum kademe
+  const MarketGroupDef(this.key, this.name, this.tier);
+}
+
+const List<MarketGroupDef> marketGroupDefs = [
+  MarketGroupDef('ana', 'Ana Marketler', 0),
+  MarketGroupDef('gol', 'Gol Marketleri', 1),
+  MarketGroupDef('handikap', 'Handikap & Kombine', 2),
+  MarketGroupDef('ozel', 'Özel Marketler', 3),
+];
+
+MarketGroupDef marketGroupDef(String key) =>
+    marketGroupDefs.firstWhere((g) => g.key == key,
+        orElse: () => marketGroupDefs.last);
+
+/// Market adına göre grup anahtarı.
+String marketGroupKeyFor(String marketName) {
+  final n = marketName.toLowerCase();
+  if (n.contains('handikap') ||
+      n.contains('maç sonucu ve') ||
+      n.contains('y/ms')) {
+    return 'handikap';
+  }
+  if (n.contains('gol')) return 'gol';
+  if (n.contains('maç sonucu') ||
+      n.contains('çifte şans') ||
+      n.contains('yarı sonucu')) {
+    return 'ana';
+  }
+  return 'ozel';
+}
+
+const Set<String> _anaCodes = {
+  'MS1', 'MSX', 'MS2', 'CS1X', 'CS12', 'CSX2', 'IY1', 'IYX', 'IY2',
+};
+
+/// Analiz kaydı (kod veya market adı) için grup anahtarı.
+String analysisGroupKeyFor(String marketCodeOrName) {
+  if (_anaCodes.contains(marketCodeOrName)) return 'ana';
+  if (marketCodeOrName.startsWith('ALT') ||
+      marketCodeOrName.startsWith('UST') ||
+      marketCodeOrName.startsWith('KG')) {
+    return 'gol';
+  }
+  if (marketLabels.containsKey(marketCodeOrName)) return 'ana';
+  return marketGroupKeyFor(marketCodeOrName);
+}
+
 /// MS market kodu → seçenek adı (ev/beraberlik/deplasman).
 String outcomeName(String code, {String? home, String? away}) {
   switch (code) {

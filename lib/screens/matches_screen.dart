@@ -22,7 +22,8 @@ class _MatchesScreenState extends ConsumerState<MatchesScreen> {
   @override
   Widget build(BuildContext context) {
     final user = ref.watch(authProvider).user;
-    final premium = user?.isPremium ?? false;
+    // Bülten DEĞER sinyalleri ve model favorisi Gümüş (2) ve üzeri paketlerde
+    final premium = (user?.tier ?? 0) >= 2;
     final live = ref.watch(liveMatchesProvider);
     final today = ref.watch(todayMatchesProvider);
     final tomorrow = ref.watch(tomorrowMatchesProvider);
@@ -31,7 +32,7 @@ class _MatchesScreenState extends ConsumerState<MatchesScreen> {
 
     return Column(
       children: [
-        AppHeader(premium: premium),
+        AppHeader(premium: (user?.tier ?? 0) > 0),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
           child: Container(
@@ -165,7 +166,7 @@ class _MatchesScreenState extends ConsumerState<MatchesScreen> {
   Widget _lockBanner() => Padding(
         padding: const EdgeInsets.only(bottom: 12),
         child: GestureDetector(
-          onTap: () => showPaywall(context),
+          onTap: () => showPaywall(context, highlightTier: 2),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             decoration: BoxDecoration(
@@ -185,7 +186,7 @@ class _MatchesScreenState extends ConsumerState<MatchesScreen> {
                   child: Text.rich(
                     TextSpan(children: [
                       TextSpan(
-                          text: 'Bülten değer sinyalleri Premium\'da. ',
+                          text: 'Bülten değer sinyalleri Gümüş pakette. ',
                           style: AppText.sans(
                               size: 12, weight: FontWeight.w800, color: const Color(0xFFE3C583))),
                       TextSpan(

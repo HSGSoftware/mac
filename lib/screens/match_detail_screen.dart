@@ -78,7 +78,7 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final detail = ref.watch(matchDetailProvider(widget.matchId));
-    final premium = ref.watch(authProvider).user?.isPremium ?? false;
+    final tier = ref.watch(authProvider).user?.tier ?? 0;
     return Scaffold(
       body: detail.when(
         loading: () => const Center(
@@ -111,7 +111,7 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
                     ..._outcomeCards(d.odds, impliedMs, analysis, home, away),
                     if (analysis == null && !_analyzing) ...[
                       const SizedBox(height: 12),
-                      _analyzeCta(premium),
+                      _analyzeCta(tier),
                     ],
                     if (_analyzing) ...[
                       const SizedBox(height: 12),
@@ -124,8 +124,8 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
                         const SizedBox(height: 10),
                         _reasonsCard(analysis),
                       ],
-                      ..._valueSection(analysis),
-                      ..._marketAnalysesSection(analysis),
+                      ..._valueSection(analysis, tier),
+                      ..._marketAnalysesSection(analysis, tier),
                     ],
                     if (isLive && stats.live.isNotEmpty) ...[
                       const SizedBox(height: 18),
@@ -159,7 +159,7 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
                     ],
                     if (d.markets.isNotEmpty) ...[
                       const SizedBox(height: 18),
-                      _AllMarkets(count: d.markets.length, markets: d.markets),
+                      _GroupedMarkets(markets: d.markets, tier: tier),
                     ],
                     const SizedBox(height: 18),
                     Text(
@@ -357,7 +357,10 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
         TextSpan(text: v, style: AppText.mono(size: 10.5)),
       ]));
 
-  Widget _analyzeCta(bool premium) {
+  Widget _analyzeCta(int tier) {
+    final note = tier >= 3
+        ? 'Altın paket: sınırsız analiz'
+        : '${tierNames[tier]} paket: günlük analiz hakkınızla';
     return Column(
       children: [
         SizedBox(
@@ -370,9 +373,7 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
         ),
         const SizedBox(height: 6),
         Text(
-          premium
-              ? 'Premium: sınırsız analiz'
-              : 'Ücretsiz planda günlük analiz hakkınızla',
+          note,
           style: AppText.sans(
               size: 10, weight: FontWeight.w500, color: AppColors.textMuted),
         ),
@@ -511,30 +512,75 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
         : m.market;
   }
 
+  /// Analiz kaydının kilitli olup olmadığı (grubunun kademesi > kullanıcı kademesi).
+  bool _maLocked(MarketAnalysis m, int tier) =>
+      marketGroupDef(analysisGroupKeyFor(m.market)).tier > tier;
+
+  /// Kilitli analiz sayısını gösteren, paywall açan ipucu kartı.
+  Widget _lockedHint(int count, int tier) {
+    // bir üst paket önerisi
+    final next = (tier + 1).clamp(1, 3).toInt();
+    return GestureDetector(
+      onTap: () => showPaywall(context, highlightTier: next),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 9),
+        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 12),
+        decoration: BoxDecoration(
+          color: AppColors.goldDim,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.gold.withValues(alpha: 0.5)),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.lock_outline, size: 17, color: AppColors.gold),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                '+$count market analizi daha var — üst paketlerle açılır.',
+                style: AppText.sans(
+                    size: 12, weight: FontWeight.w700, color: const Color(0xFFE7CE8B)),
+              ),
+            ),
+            Text('Paketler ›',
+                style: AppText.sans(
+                    size: 11, weight: FontWeight.w800, color: AppColors.gold)),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// "Değer fırsatları": modelin orandan yüksek olasılık verdiği seçimler.
-  List<Widget> _valueSection(Analysis a) {
-    final values = a.markets.where((m) => m.degerVarMi).toList()
+  List<Widget> _valueSection(Analysis a, int tier) {
+    final all = a.markets.where((m) => m.degerVarMi).toList()
       ..sort((x, y) => (y.degerFarki ?? 0).compareTo(x.degerFarki ?? 0));
-    if (values.isEmpty) return const [];
+    if (all.isEmpty) return const [];
+    final visible = all.where((m) => !_maLocked(m, tier)).take(5).toList();
+    final lockedCount = all.length - all.where((m) => !_maLocked(m, tier)).length;
     return [
       const SizedBox(height: 18),
       _sectionHead('Değer fırsatları', trailing: 'model > oranın iması'),
       const SizedBox(height: 9),
-      ...values.take(5).map((m) => _marketAnalysisCard(m, highlight: true)),
+      ...visible.map((m) => _marketAnalysisCard(m, highlight: true)),
+      if (lockedCount > 0) _lockedHint(lockedCount, tier),
     ];
   }
 
-  /// Tüm market analizleri (MS zaten üstte bar olarak var; burada gerekçeleriyle hepsi).
-  List<Widget> _marketAnalysesSection(Analysis a) {
+  /// Market analizleri — kullanıcının paketinin desteklediği gruplar görünür.
+  List<Widget> _marketAnalysesSection(Analysis a, int tier) {
     final rest = a.markets
         .where((m) => m.olasilik != null && !m.degerVarMi)
         .toList();
     if (rest.isEmpty) return const [];
+    final visible = rest.where((m) => !_maLocked(m, tier)).toList();
+    final lockedCount = rest.length - visible.length;
     return [
       const SizedBox(height: 18),
-      _sectionHead('Market analizleri (${a.markets.where((m) => m.olasilik != null).length})'),
+      _sectionHead(
+          'Market analizleri (${a.markets.where((m) => m.olasilik != null).length})'),
       const SizedBox(height: 9),
-      ...rest.map((m) => _marketAnalysisCard(m)),
+      ...visible.map((m) => _marketAnalysisCard(m)),
+      if (lockedCount > 0) _lockedHint(lockedCount, tier),
     ];
   }
 
@@ -751,66 +797,123 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
   }
 }
 
-/// "Tüm Marketler" genişleyebilir bölümü.
-class _AllMarkets extends StatefulWidget {
-  final int count;
-  final List markets;
-  const _AllMarkets({required this.count, required this.markets});
+/// Marketler, gruplara ayrılmış ve pakete göre kilitli/açık gösterilir.
+class _GroupedMarkets extends StatefulWidget {
+  final List markets; // List<BetMarket>
+  final int tier;
+  const _GroupedMarkets({required this.markets, required this.tier});
   @override
-  State<_AllMarkets> createState() => _AllMarketsState();
+  State<_GroupedMarkets> createState() => _GroupedMarketsState();
 }
 
-class _AllMarketsState extends State<_AllMarkets> {
-  bool _open = false;
+class _GroupedMarketsState extends State<_GroupedMarkets> {
+  final Set<String> _open = {'ana'}; // Ana Marketler varsayılan açık
 
   @override
   Widget build(BuildContext context) {
+    // Marketleri gruplara dağıt (tanım sırası korunur)
+    final byGroup = <String, List>{};
+    for (final m in widget.markets) {
+      final key = marketGroupKeyFor(m.name as String);
+      (byGroup[key] ??= []).add(m);
+    }
+
+    final children = <Widget>[
+      Text('MARKET GRUPLARI', style: AppText.section()),
+      const SizedBox(height: 8),
+    ];
+    for (final def in marketGroupDefs) {
+      final items = byGroup[def.key];
+      if (items == null || items.isEmpty) continue;
+      final unlocked = widget.tier >= def.tier;
+      final isOpen = unlocked && _open.contains(def.key);
+      children.add(_groupHeader(def, items.length, unlocked, isOpen));
+      if (isOpen) {
+        children.addAll(items.map((m) => _marketCard(m)));
+      }
+      children.add(const SizedBox(height: 6));
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        GestureDetector(
-          onTap: () => setState(() => _open = !_open),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text('TÜM MARKETLER (${widget.count})', style: AppText.section()),
-              ),
-              Icon(_open ? Icons.expand_less : Icons.expand_more,
-                  color: AppColors.textSecondary, size: 20),
-            ],
-          ),
-        ),
-        if (_open) ...[
-          const SizedBox(height: 8),
-          ...widget.markets.map((m) => Container(
-                margin: const EdgeInsets.only(bottom: 8),
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: AppColors.surface,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppColors.surface2),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(m.name,
-                        style: AppText.sans(size: 12.5, weight: FontWeight.w700)),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 7,
-                      runSpacing: 7,
-                      children: m.outcomes
-                          .map<Widget>((o) => ConstrainedBox(
-                                constraints: const BoxConstraints(minWidth: 74),
-                                child: OddsBox(label: o.label, value: o.odd, compact: true),
-                              ))
-                          .toList(),
-                    ),
-                  ],
-                ),
-              )),
-        ],
-      ],
+      children: children,
     );
   }
+
+  Widget _groupHeader(MarketGroupDef def, int count, bool unlocked, bool isOpen) {
+    return GestureDetector(
+      onTap: () {
+        if (!unlocked) {
+          showPaywall(context, highlightTier: def.tier);
+          return;
+        }
+        setState(() =>
+            isOpen ? _open.remove(def.key) : _open.add(def.key));
+      },
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 12),
+        decoration: BoxDecoration(
+          color: unlocked ? AppColors.surface : AppColors.goldDim,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+              color: unlocked
+                  ? AppColors.surface2
+                  : AppColors.gold.withValues(alpha: 0.5)),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              unlocked
+                  ? (isOpen ? Icons.expand_less : Icons.expand_more)
+                  : Icons.lock_outline,
+              size: 18,
+              color: unlocked ? AppColors.textSecondary : AppColors.gold,
+            ),
+            const SizedBox(width: 9),
+            Expanded(
+              child: Text('${def.name} ($count)',
+                  style: AppText.sans(
+                      size: 13,
+                      weight: FontWeight.w700,
+                      color: unlocked
+                          ? AppColors.textPrimary
+                          : const Color(0xFFE7CE8B))),
+            ),
+            if (!unlocked)
+              Text('${tierNames[def.tier]} paketiyle',
+                  style: AppText.sans(
+                      size: 10.5, weight: FontWeight.w800, color: AppColors.gold)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _marketCard(dynamic m) => Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.surface2),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(m.name,
+                style: AppText.sans(size: 12.5, weight: FontWeight.w700)),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 7,
+              runSpacing: 7,
+              children: m.outcomes
+                  .map<Widget>((o) => ConstrainedBox(
+                        constraints: const BoxConstraints(minWidth: 74),
+                        child: OddsBox(label: o.label, value: o.odd, compact: true),
+                      ))
+                  .toList(),
+            ),
+          ],
+        ),
+      );
 }

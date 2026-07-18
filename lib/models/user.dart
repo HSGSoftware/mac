@@ -15,7 +15,26 @@ class AppUser {
     required this.dailyAnalysisCount,
   });
 
-  bool get isPremium => plan == 'premium';
+  /// Paket kademesi: 0=Ücretsiz, 1=Bronz, 2=Gümüş, 3=Altın.
+  /// Eski 'premium' değeri Altın sayılır.
+  int get tier {
+    switch (plan) {
+      case 'bronz':
+        return 1;
+      case 'gumus':
+        return 2;
+      case 'altin':
+      case 'premium':
+        return 3;
+      default:
+        return 0;
+    }
+  }
+
+  bool get isPremium => tier > 0;
+
+  String get planName =>
+      const ['ÜCRETSİZ', 'BRONZ', 'GÜMÜŞ', 'ALTIN'][tier];
 
   factory AppUser.fromJson(Map<String, dynamic> j) => AppUser(
         id: j['id'] as int,

@@ -63,16 +63,23 @@ class CouponSummary {
 
 class DailyCoupon {
   final String? date;
+  final bool locked; // Altın paket gerektirir
   final List<CouponPick> picks;
   final CouponSummary summary;
-  DailyCoupon({this.date, required this.picks, required this.summary});
+  DailyCoupon({
+    this.date,
+    this.locked = false,
+    required this.picks,
+    required this.summary,
+  });
 
   factory DailyCoupon.fromJson(Map<String, dynamic> j) => DailyCoupon(
         date: j['date'] as String?,
+        locked: j['locked'] as bool? ?? false,
         picks: ((j['picks'] as List?) ?? [])
             .map((e) => CouponPick.fromJson(Map<String, dynamic>.from(e)))
             .toList(),
         summary: CouponSummary.fromJson(
-            Map<String, dynamic>.from(j['summary'] ?? {})),
+            Map<String, dynamic>.from(j['summary'] is Map ? j['summary'] : {})),
       );
 }

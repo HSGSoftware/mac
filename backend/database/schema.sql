@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS users (
     email              VARCHAR(190) NOT NULL,
     password_hash      VARCHAR(255) NOT NULL,
     name               VARCHAR(120) DEFAULT NULL,
-    plan               ENUM('free','premium') NOT NULL DEFAULT 'free',
+    plan               VARCHAR(20) NOT NULL DEFAULT 'free', -- free / bronz / gumus / altin
     premium_until      DATETIME DEFAULT NULL,
     daily_analysis_count INT UNSIGNED NOT NULL DEFAULT 0,
     counter_date       DATE DEFAULT NULL,
@@ -212,6 +212,8 @@ INSERT INTO settings (skey, svalue) VALUES
     ('openai_model', 'gpt-4o-mini'),
     ('analysis_prompt', ''),
     ('free_daily_limit', '3'),
+    ('bronz_daily_limit', '15'),
+    ('gumus_daily_limit', '40'),
     ('scraper_base_url', 'https://www.mackolik.com'),
     ('scraper_user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36'),
     ('announcement', '')

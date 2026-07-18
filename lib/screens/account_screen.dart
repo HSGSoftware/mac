@@ -2,27 +2,33 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../core/constants.dart';
 import '../core/theme.dart';
 import '../providers/providers.dart';
 import '../widgets/badges.dart';
 import '../widgets/paywall_sheet.dart';
 import 'app_header.dart';
 
-/// Hesap ekranı: profil + plan durumu + premium ayrıcalıkları + tercihler.
+/// Hesap ekranı: profil + paket durumu + paket ayrıcalıkları + tercihler.
 class AccountScreen extends ConsumerWidget {
   const AccountScreen({super.key});
 
-  static const _perks = [
-    'Model kazanma olasılıkları',
-    'DEĞER sinyalleri ve bildirimleri',
-    'Analiz gerekçeleri + güven puanı',
-    'Canlı maç istatistikleri',
+  /// (özellik, gereken kademe)
+  static const _perks = <(String, int)>[
+    ('Ana Marketler + AI analizi', 0),
+    ('Gol Marketleri analizi', 1),
+    ('Handikap & Kombine analizleri', 2),
+    ('Bültende DEĞER sinyalleri', 2),
+    ('Özel marketler (tümü)', 3),
+    ('Günün Kuponu', 3),
+    ('Sınırsız AI analizi', 3),
   ];
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final user = ref.watch(authProvider).user;
-    final premium = user?.isPremium ?? false;
+    final tier = user?.tier ?? 0;
+    final premium = tier > 0;
     final initials = _initials(user?.name, user?.email);
 
     return Column(
@@ -67,16 +73,18 @@ class AccountScreen extends ConsumerWidget {
                     ),
                   ),
                   Pill(
-                    text: premium ? 'PREMIUM' : 'ÜCRETSİZ',
+                    text: user?.planName ?? 'ÜCRETSİZ',
                     color: premium ? const Color(0xFF2A2008) : AppColors.textSecondary,
                     bg: premium ? AppColors.gold : AppColors.surface2,
                   ),
                 ],
               ),
               const SizedBox(height: 16),
-              premium ? _premiumCard(user?.premiumUntil) : _freeCard(context, user?.dailyAnalysisCount ?? 0),
+              premium
+                  ? _premiumCard(context, tier, user?.premiumUntil)
+                  : _freeCard(context, user?.dailyAnalysisCount ?? 0),
               const SizedBox(height: 16),
-              Text('PREMIUM AYRICALIKLARI', style: AppText.section()),
+              Text('PAKET AYRICALIKLARI', style: AppText.section()),
               const SizedBox(height: 8),
               Container(
                 decoration: BoxDecoration(
@@ -85,30 +93,39 @@ class AccountScreen extends ConsumerWidget {
                   border: Border.all(color: AppColors.surface2),
                 ),
                 child: Column(
-                  children: _perks
-                      .map((p) => Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                            child: Row(
-                              children: [
-                                Icon(Icons.check,
-                                    size: 16,
-                                    color: premium ? AppColors.gold : AppColors.textMuted),
-                                const SizedBox(width: 11),
-                                Expanded(
-                                    child: Text(p,
-                                        style: AppText.sans(
-                                            size: 12.5,
-                                            weight: FontWeight.w600,
-                                            color: premium
-                                                ? AppColors.textPrimary
-                                                : AppColors.textSecondary))),
-                                if (!premium)
-                                  const Icon(Icons.lock_outline,
-                                      size: 14, color: AppColors.textMuted),
-                              ],
-                            ),
-                          ))
-                      .toList(),
+                  children: _perks.map((p) {
+                    final unlocked = tier >= p.$2;
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 10),
+                      child: Row(
+                        children: [
+                          Icon(unlocked ? Icons.check : Icons.lock_outline,
+                              size: 16,
+                              color: unlocked
+                                  ? AppColors.gold
+                                  : AppColors.textMuted),
+                          const SizedBox(width: 11),
+                          Expanded(
+                              child: Text(p.$1,
+                                  style: AppText.sans(
+                                      size: 12.5,
+                                      weight: FontWeight.w600,
+                                      color: unlocked
+                                          ? AppColors.textPrimary
+                                          : AppColors.textSecondary))),
+                          if (p.$2 > 0)
+                            Text(tierNames[p.$2],
+                                style: AppText.sans(
+                                    size: 9.5,
+                                    weight: FontWeight.w800,
+                                    color: unlocked
+                                        ? AppColors.gold
+                                        : AppColors.textMuted)),
+                        ],
+                      ),
+                    );
+                  }).toList(),
                 ),
               ),
               const SizedBox(height: 16),
@@ -164,7 +181,7 @@ class AccountScreen extends ConsumerWidget {
     );
   }
 
-  Widget _premiumCard(String? until) {
+  Widget _premiumCard(BuildContext context, int tier, String? until) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -183,15 +200,29 @@ class AccountScreen extends ConsumerWidget {
             children: [
               const Icon(Icons.workspace_premium, color: AppColors.gold, size: 20),
               const SizedBox(width: 9),
-              Text('Premium aktif',
+              Text('${tierNames[tier]} paket aktif',
                   style: AppText.sans(
                       size: 14.5, weight: FontWeight.w800, color: const Color(0xFFE7CE8B))),
             ],
           ),
           const SizedBox(height: 6),
-          Text(until != null ? 'Yenileme: $until' : 'Tüm model sinyalleri açık.',
+          Text(until != null ? 'Yenileme: $until' : 'Paket ayrıcalıkların açık.',
               style: AppText.sans(
                   size: 11.5, weight: FontWeight.w500, color: const Color(0xFFC9B279))),
+          if (tier < 3) ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.gold,
+                    foregroundColor: const Color(0xFF2A2008)),
+                onPressed: () =>
+                    showPaywall(context, highlightTier: tier + 1),
+                child: Text('${tierNames[tier + 1]} paketine yükselt'),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -216,7 +247,7 @@ class AccountScreen extends ConsumerWidget {
               style: AppText.sans(
                   size: 14.5, weight: FontWeight.w800, color: const Color(0xFFE7CE8B))),
           const SizedBox(height: 5),
-          Text('Model olasılıkları, DEĞER sinyalleri ve gerekçeler kilitli.',
+          Text('Gol, Handikap ve Özel market grupları paketlerle açılır.',
               style: AppText.sans(
                   size: 11.5, weight: FontWeight.w500, color: const Color(0xFFC9B279))),
           const SizedBox(height: 12),
@@ -226,8 +257,8 @@ class AccountScreen extends ConsumerWidget {
               style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.gold,
                   foregroundColor: const Color(0xFF2A2008)),
-              onPressed: () => showPaywall(context),
-              child: const Text("Premium'a geç"),
+              onPressed: () => showPaywall(context, highlightTier: 1),
+              child: const Text('Paketleri gör'),
             ),
           ),
         ],

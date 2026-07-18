@@ -4,6 +4,7 @@ namespace MacRadar\Controllers\Api;
 
 use MacRadar\Core\Auth;
 use MacRadar\Core\Database;
+use MacRadar\Core\Plans;
 use MacRadar\Core\Request;
 use MacRadar\Core\Response;
 use MacRadar\Core\Settings;
@@ -31,14 +32,17 @@ class AnalysisController
             Response::ok(['analysis' => $this->present($cached), 'cached' => true]);
         }
 
-        // Limit kontrolü (premium sınırsız)
-        if (!$this->isPremium($user)) {
-            $limit = (int) Settings::get('free_daily_limit', 3);
+        // Limit kontrolü — paket kademesine göre (Altın sınırsız)
+        $tier = Plans::tierOf($user);
+        $limit = Plans::dailyLimit($tier);
+        if ($limit !== null) {
             $count = $this->todaysCount($user);
             if ($count >= $limit) {
-                Response::error('limit_reached', "Günlük ücretsiz analiz hakkınız doldu ($limit). Premium'a geçerek sınırsız analiz yapabilirsiniz.", 429, [
+                $planName = Plans::NAMES[$tier] ?? 'Ücretsiz';
+                Response::error('limit_reached', "Günlük analiz hakkınız doldu ($limit — $planName paket). Daha yüksek pakete geçerek daha fazla analiz yapabilirsiniz.", 429, [
                     'limit' => $limit,
                     'used' => $count,
+                    'tier' => $tier,
                 ]);
             }
         }
@@ -50,7 +54,7 @@ class AnalysisController
         }
 
         // Yeni analiz üretildiyse limit sayacını artır
-        if (!$this->isPremium($user)) {
+        if ($limit !== null) {
             $this->incrementCount($user);
         }
 
@@ -69,12 +73,6 @@ class AnalysisController
             Response::error('not_found', 'Bu maç için henüz analiz yok.', 404);
         }
         Response::ok(['analysis' => $this->present($analysis)]);
-    }
-
-    private function isPremium(array $user): bool
-    {
-        return $user['plan'] === 'premium'
-            && (!$user['premium_until'] || strtotime($user['premium_until']) > time());
     }
 
     private function todaysCount(array $user): int

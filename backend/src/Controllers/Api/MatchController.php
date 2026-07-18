@@ -5,6 +5,7 @@ namespace MacRadar\Controllers\Api;
 use MacRadar\Core\Auth;
 use MacRadar\Core\Config;
 use MacRadar\Core\Database;
+use MacRadar\Core\Plans;
 use MacRadar\Core\Request;
 use MacRadar\Core\Response;
 use MacRadar\Core\Settings;
@@ -460,11 +461,23 @@ class MatchController
         ]);
     }
 
-    /** GET /coupon/daily — modelin bugünkü en yüksek değer marjlı seçimlerinden kupon */
+    /** GET /coupon/daily — modelin bugünkü en yüksek değer marjlı seçimlerinden kupon (Altın paket) */
     public function dailyCoupon(Request $req): void
     {
         $tz = new \DateTimeZone(Config::get('app.timezone', 'Europe/Istanbul'));
         $today = (new \DateTime('now', $tz))->format('Y-m-d');
+
+        // Günün Kuponu yalnızca Altın pakette
+        $viewer = Auth::optional($req);
+        if (Plans::tierOf($viewer) < 3) {
+            Response::ok([
+                'date' => $today,
+                'locked' => true,
+                'required_plan' => 'altin',
+                'picks' => [],
+                'summary' => (object) [],
+            ]);
+        }
         $rows = Database::fetchAll(
             "SELECT m.id, m.start_time, m.status, l.name AS league_name,
                     ht.name AS home_name, at.name AS away_name, a.result AS a_result
