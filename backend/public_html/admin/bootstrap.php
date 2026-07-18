@@ -22,6 +22,8 @@ use MacRadar\Core\Database;
 
 Config::load();
 date_default_timezone_set(Config::get('app.timezone', 'Europe/Istanbul'));
+// AI analizi/scrape uzun sürebilir; admin işlemlerinde zaman aşımını yükselt
+@set_time_limit(150);
 
 if (session_status() !== PHP_SESSION_ACTIVE) {
     session_name('macradar_admin');
