@@ -69,6 +69,10 @@ $router->get('/favorites', [$matches, 'favorites']);
 $router->post('/favorites', [$matches, 'addFavorite']);
 $router->delete('/favorites/{id}', [$matches, 'removeFavorite']);
 
+// ---- Analizlerim / Günün Kuponu ----
+$router->get('/me/analyses', [$matches, 'myAnalyses']);
+$router->get('/coupon/daily', [$matches, 'dailyCoupon']);
+
 // ---- İstatistik ----
 $router->get('/stats/success-rate', [$matches, 'successRate']);
 

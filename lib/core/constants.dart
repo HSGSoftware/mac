@@ -28,3 +28,24 @@ const Map<String, String> marketLabels = {
 };
 
 String marketLabel(String code) => marketLabels[code] ?? code;
+
+/// MS market kodu → kısa etiket (1 / X / 2).
+const Map<String, String> msShort = {
+  'MS1': '1',
+  'MSX': 'X',
+  'MS2': '2',
+};
+
+/// MS market kodu → seçenek adı (ev/beraberlik/deplasman).
+String outcomeName(String code, {String? home, String? away}) {
+  switch (code) {
+    case 'MS1':
+      return home != null ? '$home kazanır' : 'Ev sahibi kazanır';
+    case 'MSX':
+      return 'Beraberlik';
+    case 'MS2':
+      return away != null ? '$away kazanır' : 'Deplasman kazanır';
+    default:
+      return marketLabel(code);
+  }
+}

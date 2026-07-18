@@ -28,6 +28,18 @@ class MarketAnalysis {
       );
 }
 
+/// Modelin gerekçe maddesi ("Model neden böyle düşünüyor?").
+class AnalysisReason {
+  final String tag;
+  final String text;
+  AnalysisReason({required this.tag, required this.text});
+
+  factory AnalysisReason.fromJson(Map<String, dynamic> j) => AnalysisReason(
+        tag: (j['etiket'] ?? j['tag'] ?? '').toString(),
+        text: (j['metin'] ?? j['text'] ?? '').toString(),
+      );
+}
+
 class Analysis {
   final int id;
   final int matchId;
@@ -38,6 +50,8 @@ class Analysis {
   final String? safestPick;
   final String? surpriseLevel;
   final bool isRisky;
+  final int? confidence; // 1-10 güven
+  final List<AnalysisReason> reasons;
   final String? createdAt;
 
   Analysis({
@@ -50,13 +64,27 @@ class Analysis {
     this.safestPick,
     this.surpriseLevel,
     required this.isRisky,
+    this.confidence,
+    this.reasons = const [],
     this.createdAt,
   });
+
+  /// Belirli bir MS market için model olasılığı (0-100).
+  MarketAnalysis? marketFor(String code) {
+    for (final m in markets) {
+      if (m.market == code) return m;
+    }
+    return null;
+  }
 
   factory Analysis.fromJson(Map<String, dynamic> j) {
     final result = j['result'] as Map<String, dynamic>?;
     final markets = ((result?['markets'] as List?) ?? [])
         .map((e) => MarketAnalysis.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+    final reasons = ((result?['nedenler'] as List?) ?? [])
+        .whereType<Map>()
+        .map((e) => AnalysisReason.fromJson(Map<String, dynamic>.from(e)))
         .toList();
     return Analysis(
       id: j['id'] as int,
@@ -68,6 +96,8 @@ class Analysis {
       safestPick: j['safest_pick'] as String?,
       surpriseLevel: j['surprise_level'] as String?,
       isRisky: j['is_risky'] as bool? ?? false,
+      confidence: (result?['guven'] as num?)?.toInt(),
+      reasons: reasons,
       createdAt: j['created_at'] as String?,
     );
   }

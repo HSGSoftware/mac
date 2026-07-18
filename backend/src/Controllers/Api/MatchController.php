@@ -64,6 +64,7 @@ class MatchController
         $sql .= ' ORDER BY l.priority ASC, l.name ASC, m.start_time ASC';
 
         $rows = Database::fetchAll($sql, $params);
+        $this->loadSignals(array_map(fn($r) => (int) $r['id'], $rows));
         $matches = array_map([$this, 'presentListItem'], $rows);
 
         // Lige göre grupla
@@ -112,6 +113,7 @@ class MatchController
              ORDER BY m.start_time ASC",
             [$nowLocal->modify('-4 hours')->format('Y-m-d H:i:s')]
         );
+        $this->loadSignals(array_map(fn($r) => (int) $r['id'], $rows));
         Response::ok(['matches' => array_map([$this, 'presentListItem'], $rows)]);
     }
 
@@ -132,6 +134,21 @@ class MatchController
         );
         if (!$row) {
             Response::error('not_found', 'Maç bulunamadı.', 404);
+        }
+
+        // Giriş yapmış kullanıcının maç görüntüleme geçmişini kaydet ("Analizlerim")
+        $viewer = Auth::optional($req);
+        if ($viewer) {
+            try {
+                Database::execute(
+                    "INSERT INTO user_analysis_history (user_id, match_id, first_viewed_at, last_viewed_at)
+                     VALUES (?, ?, NOW(), NOW())
+                     ON DUPLICATE KEY UPDATE last_viewed_at = NOW()",
+                    [$viewer['id'], $id]
+                );
+            } catch (\Throwable $e) {
+                // geçmiş tablosu yoksa akışı bozma
+            }
         }
 
         $odds = $this->latestOdds($id);
@@ -190,6 +207,7 @@ class MatchController
              ORDER BY m.start_time ASC",
             [$user['id']]
         );
+        $this->loadSignals(array_map(fn($r) => (int) $r['id'], $rows));
         $items = array_map([$this, 'presentListItem'], $rows);
         foreach ($items as &$it) { unset($it['league']); }
         Response::ok(['matches' => $items]);
@@ -281,12 +299,258 @@ class MatchController
                 'MS2' => $this->oddOf($r['id'], 'MS2'),
             ],
             'has_analysis' => (int) ($r['has_analysis'] ?? 0) > 0,
+            'signal' => $this->signalCache[(int) $r['id']] ?? null,
             'league' => [
                 'id' => $r['league_id'] ? (int) $r['league_id'] : null,
                 'name' => $r['league_name'],
                 'country' => $r['league_country'],
             ],
         ];
+    }
+
+    /**
+     * Verilen maçlar için model sinyalini (en iyi MS seçimi + değer marjı) toplu yükle.
+     * Bülten/canlı listesinde "DEĞER" rozeti ve favori oran vurgusu için kullanılır.
+     */
+    private array $signalCache = [];
+    private function loadSignals(array $matchIds): void
+    {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $matchIds))));
+        if (!$ids) {
+            return;
+        }
+        $place = implode(',', array_fill(0, count($ids), '?'));
+        $rows = Database::fetchAll(
+            "SELECT a.match_id, a.result
+             FROM analyses a
+             JOIN (SELECT match_id, MAX(id) AS mid FROM analyses
+                   WHERE status='done' AND match_id IN ($place) GROUP BY match_id) t
+               ON t.mid = a.id",
+            $ids
+        );
+        foreach ($rows as $r) {
+            $res = $r['result'] ? json_decode($r['result'], true) : null;
+            if (!is_array($res) || empty($res['markets'])) {
+                continue;
+            }
+            $sig = $this->msSignal($res['markets']);
+            if ($sig) {
+                $this->signalCache[(int) $r['match_id']] = $sig;
+            }
+        }
+    }
+
+    /** MS marketlerinden en yüksek olasılıklı seçimi + değer marjını çıkar. */
+    private function msSignal(array $markets): ?array
+    {
+        $best = null;
+        $bestProb = -1;
+        $impliedOfBest = null;
+        $hasValue = false;
+        foreach ($markets as $m) {
+            if (!is_array($m)) {
+                continue;
+            }
+            $code = $m['market'] ?? '';
+            if (!in_array($code, ['MS1', 'MSX', 'MS2'], true)) {
+                continue;
+            }
+            if (!isset($m['olasilik'])) {
+                continue;
+            }
+            $prob = (float) $m['olasilik'];
+            if (!empty($m['deger_var_mi'])) {
+                $hasValue = true;
+            }
+            if ($prob > $bestProb) {
+                $bestProb = $prob;
+                $best = $code;
+                $impliedOfBest = isset($m['implied_olasilik']) ? (float) $m['implied_olasilik'] : null;
+            }
+        }
+        if ($best === null) {
+            return null;
+        }
+        return [
+            'pick' => $best,
+            'model_pct' => (int) round($bestProb),
+            'implied_pct' => $impliedOfBest !== null ? (int) round($impliedOfBest) : null,
+            'edge' => $impliedOfBest !== null ? (int) round($bestProb - $impliedOfBest) : null,
+            'has_value' => $hasValue,
+        ];
+    }
+
+    /** GET /me/analyses — kullanıcının incelediği maçlar + AI sonuçları ("Analizlerim") */
+    public function myAnalyses(Request $req): void
+    {
+        $user = Auth::require($req);
+        $rows = Database::fetchAll(
+            "SELECT m.id, m.start_time, m.status, m.ms_home, m.ms_away,
+                    l.name AS league_name,
+                    ht.name AS home_name, at.name AS away_name,
+                    a.id AS analysis_id, a.result AS a_result, a.created_at AS analyzed_at
+             FROM user_analysis_history h
+             JOIN matches m ON m.id = h.match_id
+             LEFT JOIN leagues l ON l.id = m.league_id
+             LEFT JOIN teams ht ON ht.id = m.home_team_id
+             LEFT JOIN teams at ON at.id = m.away_team_id
+             LEFT JOIN analyses a ON a.id = (SELECT MAX(id) FROM analyses WHERE match_id = m.id AND status='done')
+             WHERE h.user_id = ?
+             ORDER BY h.last_viewed_at DESC
+             LIMIT 100",
+            [$user['id']]
+        );
+
+        $items = [];
+        $settled = 0;
+        $won = 0;
+        $oddsSum = 0.0;
+        $oddsCount = 0;
+        foreach ($rows as $r) {
+            $res = $r['a_result'] ? json_decode($r['a_result'], true) : null;
+            $sig = ($res && !empty($res['markets'])) ? $this->msSignal($res['markets']) : null;
+            $pick = $sig['pick'] ?? null;
+            $odd = null;
+            if ($pick) {
+                foreach (($res['markets'] ?? []) as $m) {
+                    if (($m['market'] ?? '') === $pick && isset($m['oran'])) {
+                        $odd = (float) $m['oran'];
+                    }
+                }
+            }
+            // Sonuç durumu
+            $status = 'open';
+            $scoreStr = null;
+            $finished = $r['status'] === 'finished' && $r['ms_home'] !== null && $r['ms_away'] !== null;
+            if ($finished) {
+                $scoreStr = ((int) $r['ms_home']) . ' - ' . ((int) $r['ms_away']);
+                if ($pick) {
+                    $actual = $r['ms_home'] > $r['ms_away'] ? 'MS1' : ($r['ms_home'] == $r['ms_away'] ? 'MSX' : 'MS2');
+                    $status = $pick === $actual ? 'won' : 'lost';
+                    $settled++;
+                    if ($status === 'won') {
+                        $won++;
+                    }
+                }
+            }
+            if ($odd) {
+                $oddsSum += $odd;
+                $oddsCount++;
+            }
+            $items[] = [
+                'match_id' => (int) $r['id'],
+                'league' => $r['league_name'],
+                'match' => $r['home_name'] . ' — ' . $r['away_name'],
+                'date' => $r['start_time'],
+                'has_analysis' => $sig !== null,
+                'pick' => $pick,
+                'model_pct' => $sig['model_pct'] ?? null,
+                'odds' => $odd,
+                'status' => $status,
+                'score' => $scoreStr,
+            ];
+        }
+        Response::ok([
+            'items' => $items,
+            'stats' => [
+                'count' => count($items),
+                'hit_pct' => $settled > 0 ? (int) round($won / $settled * 100) : null,
+                'avg_odds' => $oddsCount > 0 ? round($oddsSum / $oddsCount, 2) : null,
+            ],
+        ]);
+    }
+
+    /** GET /coupon/daily — modelin bugünkü en yüksek değer marjlı seçimlerinden kupon */
+    public function dailyCoupon(Request $req): void
+    {
+        $tz = new \DateTimeZone(Config::get('app.timezone', 'Europe/Istanbul'));
+        $today = (new \DateTime('now', $tz))->format('Y-m-d');
+        $rows = Database::fetchAll(
+            "SELECT m.id, m.start_time, m.status, l.name AS league_name,
+                    ht.name AS home_name, at.name AS away_name, a.result AS a_result
+             FROM analyses a
+             JOIN matches m ON m.id = a.match_id
+             LEFT JOIN leagues l ON l.id = m.league_id
+             LEFT JOIN teams ht ON ht.id = m.home_team_id
+             LEFT JOIN teams at ON at.id = m.away_team_id
+             WHERE a.status='done'
+               AND a.id = (SELECT MAX(id) FROM analyses WHERE match_id = m.id AND status='done')
+               AND DATE(m.start_time) >= ?
+             ORDER BY m.start_time ASC",
+            [$today]
+        );
+
+        $names = ['MS1' => 'Ev sahibi kazanır', 'MSX' => 'Beraberlik', 'MS2' => 'Deplasman kazanır'];
+        $labels = ['MS1' => '1', 'MSX' => 'X', 'MS2' => '2'];
+        $candidates = [];
+        foreach ($rows as $r) {
+            $res = $r['a_result'] ? json_decode($r['a_result'], true) : null;
+            if (!$res || empty($res['markets'])) {
+                continue;
+            }
+            $sig = $this->msSignal($res['markets']);
+            if (!$sig || ($sig['edge'] ?? 0) === null) {
+                continue;
+            }
+            // seçilen marketin oranı
+            $odd = null;
+            foreach ($res['markets'] as $m) {
+                if (($m['market'] ?? '') === $sig['pick'] && isset($m['oran'])) {
+                    $odd = (float) $m['oran'];
+                }
+            }
+            if (!$odd || ($sig['edge'] ?? 0) <= 0) {
+                continue;
+            }
+            // gerekçe: seçilen markete ait gerekçe ya da genel analiz
+            $reason = $res['genel_analiz'] ?? '';
+            foreach ($res['markets'] as $m) {
+                if (($m['market'] ?? '') === $sig['pick'] && !empty($m['gerekce'])) {
+                    $reason = $m['gerekce'];
+                }
+            }
+            $candidates[] = [
+                'match_id' => (int) $r['id'],
+                'league' => $r['league_name'],
+                'time' => $r['start_time'],
+                'match' => $r['home_name'] . ' — ' . $r['away_name'],
+                'pick_label' => $labels[$sig['pick']] ?? $sig['pick'],
+                'pick_name' => $names[$sig['pick']] ?? $sig['pick'],
+                'odds' => $odd,
+                'model_pct' => $sig['model_pct'],
+                'edge' => $sig['edge'],
+                'confidence' => isset($res['guven']) ? (int) $res['guven'] : null,
+                'reason' => mb_substr((string) $reason, 0, 180),
+            ];
+        }
+        // en yüksek değer marjına göre sırala, ilk 3
+        usort($candidates, fn($a, $b) => $b['edge'] <=> $a['edge']);
+        $picks = array_slice($candidates, 0, 3);
+
+        $totalOdds = 1.0;
+        $modelProd = 1.0;
+        $confSum = 0;
+        $confCount = 0;
+        foreach ($picks as $p) {
+            $totalOdds *= $p['odds'];
+            $modelProd *= max(0.01, $p['model_pct'] / 100);
+            if ($p['confidence'] !== null) {
+                $confSum += $p['confidence'];
+                $confCount++;
+            }
+        }
+        $impliedProd = $totalOdds > 0 ? (1 / $totalOdds) : 0;
+        Response::ok([
+            'date' => $today,
+            'picks' => $picks,
+            'summary' => [
+                'total_odds' => count($picks) ? round($totalOdds, 2) : null,
+                'model_pct' => count($picks) ? round($modelProd * 100, 1) : null,
+                'implied_pct' => count($picks) ? round($impliedProd * 100, 1) : null,
+                'edge' => count($picks) ? round(($modelProd - $impliedProd) * 100, 1) : null,
+                'confidence' => $confCount > 0 ? round($confSum / $confCount, 1) : null,
+            ],
+        ]);
     }
 
     private array $oddsCache = [];

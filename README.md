@@ -127,11 +127,27 @@ API adresi `API_BASE_URL` environment variable'ı ile derleme zamanında enjekte
 | POST | `/auth/register` · `/auth/login` · `/auth/refresh` | Kimlik |
 | GET | `/me` | Aktif kullanıcı |
 | GET | `/leagues` | Ligler |
-| GET | `/matches?date=YYYY-MM-DD` | Bülten (lige gruplu) |
-| GET | `/matches/{id}` | Maç detayı (oran + istatistik + analiz) |
+| GET | `/matches?date=YYYY-MM-DD` | Bülten (lige gruplu, listede model `signal` alanı) |
+| GET | `/matches/live` | Canlı maçlar (canlı oran + skor) |
+| GET | `/matches/{id}` | Maç detayı (oran + tüm marketler + istatistik + analiz) |
 | POST | `/matches/{id}/analyze` | AI analizi iste (önbellekli, limitli) |
 | GET | `/matches/{id}/analysis` | Mevcut analiz |
+| GET | `/me/analyses` | "Analizlerim" — kullanıcının incelediği maçlar + isabet |
+| GET | `/coupon/daily` | "Günün Kuponu" — en yüksek değer marjlı 3 seçim |
 | GET/POST/DELETE | `/favorites` | Favoriler |
 | GET | `/stats/success-rate` | AI isabet istatistikleri |
 
 Yanıt formatı: `{"success":true,"data":{...}}` / hata: `{"success":false,"error":"...","message":"..."}`.
+
+### "Maç Analiz" tasarım güncellemesi (v2)
+
+Arayüz, yüklenen tasarım dosyasına göre yeniden yapıldı:
+- **4 sekme:** Maçlar (Canlı/Bugün/Yarın) · Kupon · Analizlerim · Hesap
+- **Maç detayı:** model olasılığı vs. oranın iması barları, **DEĞER** sinyalleri, "Model neden böyle düşünüyor?" gerekçeleri + güven puanı, form/H2H/sezon karşılaştırması
+- **Fontlar:** Archivo (genel) + JetBrains Mono (sayılar/oranlar) — `google_fonts` ile
+- **AI çıktısı** artık `guven` (1-10) ve `nedenler` ([{etiket, metin}]) alanlarını da üretir.
+
+**Mevcut kuruluma geçiş:** `Analizlerim` için yeni tablo gereklidir. cPanel > phpMyAdmin'de şu dosyayı çalıştırın:
+`backend/database/migration_2026_07_history.sql` (schema.sql'i sıfırdan kuranlar için gerek yok).
+
+Yeni/değişen backend dosyalarını (`src/Controllers/Api/MatchController.php`, `src/Services/AnalysisEngine.php`, `public_html/api/index.php`) sunucuya yükleyin; Flutter tarafını Codemagic'ten yeniden derleyin.

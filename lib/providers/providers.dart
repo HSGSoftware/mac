@@ -1,7 +1,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/analysis.dart';
+import '../models/coupon.dart';
 import '../models/match.dart';
+import '../models/my_analysis.dart';
 import '../models/user.dart';
 import '../services/api_client.dart';
 import '../services/token_store.dart';
@@ -119,6 +121,47 @@ final liveMatchesProvider =
   return ((data['matches'] as List?) ?? [])
       .map((e) => MatchItem.fromJson(Map<String, dynamic>.from(e)))
       .toList();
+});
+
+// ---------------- Düz (gruplanmamış) günlük maç listeleri ----------------
+
+Future<List<MatchItem>> _flatMatchesForDate(ApiClient api, DateTime date) async {
+  final ds =
+      '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+  final data = await api.get('/matches', query: {'date': ds});
+  final out = <MatchItem>[];
+  for (final g in ((data['leagues'] as List?) ?? [])) {
+    final group = LeagueGroup.fromJson(Map<String, dynamic>.from(g));
+    out.addAll(group.matches);
+  }
+  return out;
+}
+
+final todayMatchesProvider =
+    FutureProvider.autoDispose<List<MatchItem>>((ref) async {
+  return _flatMatchesForDate(ref.read(apiClientProvider), DateTime.now());
+});
+
+final tomorrowMatchesProvider =
+    FutureProvider.autoDispose<List<MatchItem>>((ref) async {
+  return _flatMatchesForDate(
+      ref.read(apiClientProvider), DateTime.now().add(const Duration(days: 1)));
+});
+
+// ---------------- Günün Kuponu ----------------
+
+final dailyCouponProvider =
+    FutureProvider.autoDispose<DailyCoupon>((ref) async {
+  final data = await ref.read(apiClientProvider).get('/coupon/daily');
+  return DailyCoupon.fromJson(Map<String, dynamic>.from(data));
+});
+
+// ---------------- Analizlerim ----------------
+
+final myAnalysesProvider =
+    FutureProvider.autoDispose<MyAnalysesResponse>((ref) async {
+  final data = await ref.read(apiClientProvider).get('/me/analyses');
+  return MyAnalysesResponse.fromJson(Map<String, dynamic>.from(data));
 });
 
 // ---------------- Maç detay ----------------

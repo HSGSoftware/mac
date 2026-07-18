@@ -28,23 +28,37 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
+    return Scaffold(
       body: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.insights, size: 72, color: AppColors.primary),
-            SizedBox(height: 16),
-            Text('MaçRadar',
-                style: TextStyle(
-                    fontSize: 32,
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.primary)),
-            SizedBox(height: 8),
-            Text('İddaa Analiz Asistanın',
-                style: TextStyle(color: AppColors.textSecondary)),
-            SizedBox(height: 32),
-            CircularProgressIndicator(color: AppColors.primary),
+            Container(
+              width: 74,
+              height: 74,
+              decoration: BoxDecoration(
+                gradient: AppColors.primaryGradient,
+                borderRadius: BorderRadius.circular(20),
+              ),
+              alignment: Alignment.center,
+              child: Text('MA',
+                  style: AppText.sans(
+                      size: 30,
+                      weight: FontWeight.w800,
+                      color: const Color(0xFF0A1410),
+                      letterSpacing: -1)),
+            ),
+            const SizedBox(height: 18),
+            Text('Maç Analiz',
+                style: AppText.sans(size: 28, weight: FontWeight.w800)),
+            const SizedBox(height: 6),
+            Text('AI destekli iddaa analiz platformu',
+                style: AppText.sans(
+                    size: 13,
+                    weight: FontWeight.w500,
+                    color: AppColors.textSecondary)),
+            const SizedBox(height: 30),
+            const CircularProgressIndicator(color: AppColors.primary),
           ],
         ),
       ),

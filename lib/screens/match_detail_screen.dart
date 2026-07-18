@@ -1,288 +1,623 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
+import '../core/constants.dart';
 import '../core/theme.dart';
 import '../models/analysis.dart';
+import '../models/match_stats.dart';
 import '../providers/providers.dart';
 import '../services/api_client.dart';
-import '../widgets/analysis_view.dart';
+import '../widgets/badges.dart';
+import '../widgets/bars.dart';
 import '../widgets/odds_box.dart';
+import '../widgets/paywall_sheet.dart';
 
-class MatchDetailScreen extends ConsumerWidget {
+class MatchDetailScreen extends ConsumerStatefulWidget {
   final int matchId;
   const MatchDetailScreen({super.key, required this.matchId});
+  @override
+  ConsumerState<MatchDetailScreen> createState() => _MatchDetailScreenState();
+}
+
+class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
+  Analysis? _analysis;
+  bool _analyzing = false;
+  int _stage = 0;
+  Timer? _stageTimer;
+
+  static const _stages = [
+    'Maç verileri toplanıyor…',
+    'Son maçların formu inceleniyor…',
+    'Karşılaşma geçmişi (H2H) analiz ediliyor…',
+    'Güncel oranlar değerlendiriliyor…',
+    'Değerli oranlar (value bet) hesaplanıyor…',
+    'Model olasılıkları hesaplıyor…',
+  ];
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final detail = ref.watch(matchDetailProvider(matchId));
+  void dispose() {
+    _stageTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _runAnalysis() async {
+    setState(() {
+      _analyzing = true;
+      _stage = 0;
+    });
+    final started = DateTime.now();
+    _stageTimer = Timer.periodic(const Duration(milliseconds: 1500), (t) {
+      if (_stage < _stages.length - 1) setState(() => _stage++);
+    });
+    try {
+      final data = await ref
+          .read(apiClientProvider)
+          .post('/matches/${widget.matchId}/analyze');
+      final result = Analysis.fromJson(Map<String, dynamic>.from(data['analysis']));
+      const minShow = Duration(seconds: 7);
+      final elapsed = DateTime.now().difference(started);
+      if (elapsed < minShow) await Future.delayed(minShow - elapsed);
+      if (mounted) setState(() => _analysis = result);
+      ref.read(authProvider.notifier).refreshMe();
+    } on ApiException catch (e) {
+      if (e.code == 'limit_reached') {
+        if (mounted) showPaywall(context);
+      } else if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.message)));
+      }
+    } finally {
+      _stageTimer?.cancel();
+      if (mounted) setState(() => _analyzing = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final detail = ref.watch(matchDetailProvider(widget.matchId));
+    final premium = ref.watch(authProvider).user?.isPremium ?? false;
     return Scaffold(
-      appBar: AppBar(title: const Text('Maç Detayı')),
       body: detail.when(
         loading: () => const Center(
             child: CircularProgressIndicator(color: AppColors.primary)),
         error: (e, _) => Center(child: Text('Hata: $e')),
         data: (d) {
-          final match = d.match;
-          return DefaultTabController(
-            length: 2,
-            child: Column(
-              children: [
-                _header(match),
-                const TabBar(
-                  labelColor: AppColors.primary,
-                  unselectedLabelColor: AppColors.textSecondary,
-                  indicatorColor: AppColors.primary,
-                  tabs: [
-                    Tab(text: 'Oranlar'),
-                    Tab(text: 'AI Analiz'),
+          final analysis = _analysis ?? d.analysis;
+          final m = d.match;
+          final home = m['home']?['name']?.toString() ?? '-';
+          final away = m['away']?['name']?.toString() ?? '-';
+          final league = m['league']?['name']?.toString() ?? '';
+          final isLive = m['status'] == 'live';
+          final score = m['score'];
+          final stats = MatchStats.fromMap(d.stats);
+          final impliedMs = _impliedMs(d.odds);
+          final providerLine = analysis?.modelName != null
+              ? '\n${analysis!.provider} · ${analysis!.modelName}'
+              : '';
+
+          return Column(
+            children: [
+              _header(context, home, away, league, isLive, score, m['minute']?.toString()),
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 28),
+                  children: [
+                    _sectionHead('Kazanma olasılıkları',
+                        trailing: analysis != null ? 'model vs. oranın iması' : null),
+                    const SizedBox(height: 9),
+                    ..._outcomeCards(d.odds, impliedMs, analysis, home, away),
+                    if (analysis == null && !_analyzing) ...[
+                      const SizedBox(height: 12),
+                      _analyzeCta(premium),
+                    ],
+                    if (_analyzing) ...[
+                      const SizedBox(height: 12),
+                      _analyzingCard(),
+                    ],
+                    if (analysis != null &&
+                        (analysis.reasons.isNotEmpty || analysis.generalNote != null)) ...[
+                      const SizedBox(height: 16),
+                      _reasonsCard(analysis),
+                    ],
+                    if (isLive && stats.live.isNotEmpty) ...[
+                      const SizedBox(height: 18),
+                      _sectionHead('Canlı istatistikler'),
+                      const SizedBox(height: 10),
+                      ...stats.live.map((s) => Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: ComparisonBar(
+                                name: s.name, home: s.home, away: s.away, max: s.max),
+                          )),
+                    ],
+                    if (!stats.formHome.isEmpty || !stats.formAway.isEmpty) ...[
+                      const SizedBox(height: 18),
+                      _formSection(stats, home, away),
+                    ],
+                    if (stats.h2h.isNotEmpty) ...[
+                      const SizedBox(height: 18),
+                      _sectionHead('Aralarındaki son maçlar'),
+                      const SizedBox(height: 9),
+                      ...stats.h2h.map(_h2hRow),
+                    ],
+                    if (stats.season.isNotEmpty) ...[
+                      const SizedBox(height: 18),
+                      _sectionHead('Sezon karşılaştırması'),
+                      const SizedBox(height: 10),
+                      ...stats.season.map((s) => Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: ComparisonBar(
+                                name: s.name, home: s.home, away: s.away, max: s.max),
+                          )),
+                    ],
+                    if (d.markets.isNotEmpty) ...[
+                      const SizedBox(height: 18),
+                      _AllMarkets(count: d.markets.length, markets: d.markets),
+                    ],
+                    const SizedBox(height: 18),
+                    Text(
+                      'Analizler yatırım tavsiyesi değildir · 18+$providerLine',
+                      textAlign: TextAlign.center,
+                      style: AppText.sans(
+                          size: 10,
+                          weight: FontWeight.w500,
+                          color: AppColors.textMuted),
+                    ),
                   ],
                 ),
-                Expanded(
-                  child: TabBarView(
-                    children: [
-                      _OddsTab(odds: d.odds, markets: d.markets),
-                      AnalysisTab(matchId: matchId, hasAnalysis: d.analysis != null),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+              ),
+            ],
           );
         },
       ),
     );
   }
 
-  Widget _header(Map<String, dynamic> m) {
-    final home = m['home']?['name'] ?? '-';
-    final away = m['away']?['name'] ?? '-';
-    final league = m['league']?['name'] ?? '';
-    final score = m['score'];
+  // ---------------- Bölümler ----------------
+
+  Widget _header(BuildContext context, String home, String away, String league,
+      bool isLive, dynamic score, String? minute) {
     return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      color: AppColors.surface,
-      child: Column(
+      decoration: const BoxDecoration(
+        gradient: AppColors.headerGradient,
+        border: Border(bottom: BorderSide(color: AppColors.surface2)),
+      ),
+      padding: EdgeInsets.fromLTRB(
+          6, MediaQuery.of(context).padding.top + 6, 12, 10),
+      child: Row(
         children: [
-          Text(league,
-              style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                child: Text(home,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                        fontWeight: FontWeight.bold, fontSize: 16)),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Text(
-                  score != null ? '${score['home']} - ${score['away']}' : 'VS',
-                  style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 20,
-                      color: AppColors.accent),
-                ),
-              ),
-              Expanded(
-                child: Text(away,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                        fontWeight: FontWeight.bold, fontSize: 16)),
-              ),
-            ],
+          IconButton(
+            onPressed: () => context.pop(),
+            icon: const Icon(Icons.chevron_left, color: AppColors.primary),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
           ),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('$home — $away',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppText.sans(size: 14, weight: FontWeight.w800)),
+                const SizedBox(height: 2),
+                Text(
+                    isLive ? '$league · Şu an oynanıyor' : league,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppText.sans(
+                        size: 9.5,
+                        weight: FontWeight.w500,
+                        color: AppColors.textSecondary)),
+              ],
+            ),
+          ),
+          if (isLive && score != null) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
+              decoration: BoxDecoration(
+                color: AppColors.danger.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppColors.danger.withValues(alpha: 0.5)),
+              ),
+              child: Column(
+                children: [
+                  Text('${score['home']} - ${score['away']}',
+                      style: AppText.mono(size: 15)),
+                  Text(minute != null ? "$minute' CANLI" : 'CANLI',
+                      style: AppText.mono(size: 8.5, color: AppColors.danger)),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );
   }
-}
 
-class _OddsTab extends StatelessWidget {
-  final Map<String, double> odds;
-  final List<BetMarket> markets;
-  const _OddsTab({required this.odds, required this.markets});
-
-  static const _groups = [
-    ['Maç Sonucu', ['MS1', 'MSX', 'MS2'], ['1', 'X', '2']],
-    ['Çifte Şans', ['CS1X', 'CS12', 'CSX2'], ['1-X', '1-2', 'X-2']],
-    ['İlk Yarı Sonucu', ['IY1', 'IYX', 'IY2'], ['1', 'X', '2']],
-    ['2.5 Gol', ['ALT25', 'UST25'], ['Alt', 'Üst']],
-    ['1.5 Gol', ['ALT15', 'UST15'], ['Alt', 'Üst']],
-    ['3.5 Gol', ['ALT35', 'UST35'], ['Alt', 'Üst']],
-    ['Karşılıklı Gol', ['KGVAR', 'KGYOK'], ['Var', 'Yok']],
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    if (odds.isEmpty && markets.isEmpty) {
-      return const _EmptyOdds();
-    }
-    // Öne çıkan (kanonik) marketler
-    final sections = <Widget>[];
-    for (final g in _groups) {
-      final keys = g[1] as List<String>;
-      final labels = g[2] as List<String>;
-      if (!keys.any((k) => odds.containsKey(k))) continue;
-      sections.add(_sectionTitle(g[0] as String));
-      sections.add(Row(
-        children: [
-          for (var i = 0; i < keys.length; i++) ...[
-            Expanded(child: OddsBox(label: labels[i], value: odds[keys[i]])),
-            if (i != keys.length - 1) const SizedBox(width: 8),
-          ],
-        ],
+  List<Widget> _outcomeCards(Map<String, double> odds, Map<String, int> implied,
+      Analysis? analysis, String home, String away) {
+    const codes = ['MS1', 'MSX', 'MS2'];
+    final cards = <Widget>[];
+    for (final code in codes) {
+      final odd = odds[code];
+      if (odd == null) continue;
+      final imp = implied[code];
+      final ma = analysis?.marketFor(code);
+      final model = ma?.olasilik;
+      final edge = (model != null && imp != null) ? model - imp : null;
+      final isValue = ma?.degerVarMi ?? false;
+      cards.add(_outcomeCard(
+        label: msShort[code] ?? code,
+        name: outcomeName(code, home: home, away: away),
+        odd: odd,
+        implied: imp,
+        model: model,
+        edge: edge,
+        isValue: isValue,
       ));
     }
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Row(
-          children: const [
-            Icon(Icons.bolt, size: 16, color: AppColors.warning),
-            SizedBox(width: 6),
-            Text('Öne Çıkan Oranlar',
-                style: TextStyle(fontWeight: FontWeight.bold)),
-          ],
-        ),
-        ...sections,
-        if (markets.isNotEmpty) ...[
-          const SizedBox(height: 20),
-          Row(
-            children: [
-              const Icon(Icons.grid_view_rounded,
-                  size: 16, color: AppColors.accent),
-              const SizedBox(width: 6),
-              Text('Tüm Marketler (${markets.length})',
-                  style: const TextStyle(fontWeight: FontWeight.bold)),
-            ],
-          ),
-          const SizedBox(height: 4),
-          ...markets.map((m) => _MarketCardAll(market: m)),
-        ],
-        const SizedBox(height: 12),
-      ],
-    );
+    if (cards.isEmpty) {
+      cards.add(Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        child: Text('Bu maç için maç sonucu oranı bulunamadı.',
+            style: AppText.sans(size: 12, color: AppColors.textSecondary)),
+      ));
+    }
+    return cards;
   }
 
-  Widget _sectionTitle(String t) => Padding(
-        padding: const EdgeInsets.fromLTRB(4, 14, 4, 8),
-        child: Text(t,
-            style: const TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 13,
-                color: AppColors.accent)),
-      );
-}
-
-/// "Tüm Marketler" listesinde tek market kartı: ad + seçenek kutuları.
-class _MarketCardAll extends StatelessWidget {
-  final BetMarket market;
-  const _MarketCardAll({required this.market});
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _outcomeCard({
+    required String label,
+    required String name,
+    required double odd,
+    required int? implied,
+    required int? model,
+    required int? edge,
+    required bool isValue,
+  }) {
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 5),
-      padding: const EdgeInsets.all(12),
+      margin: const EdgeInsets.only(bottom: 9),
+      padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.surface2),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+            color: isValue ? AppColors.primary : AppColors.surface2),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(market.name,
-              style:
-                  const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 7,
-            runSpacing: 7,
-            children: market.outcomes
-                .map((o) => ConstrainedBox(
-                      constraints: const BoxConstraints(minWidth: 74),
-                      child: OddsBox(
-                          label: o.label, value: o.odd, compact: true),
-                    ))
-                .toList(),
+          Row(
+            children: [
+              SizedBox(
+                  width: 16,
+                  child: Text(label, style: AppText.mono(size: 11.5, color: AppColors.textSecondary))),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppText.sans(size: 12.5, weight: FontWeight.w700)),
+              ),
+              if (isValue && edge != null) ...[
+                ValueBadge(edge: edge),
+                const SizedBox(width: 8),
+              ],
+              Text('@${odd.toStringAsFixed(2)}', style: AppText.mono(size: 13.5)),
+            ],
+          ),
+          if (model != null) ...[
+            const SizedBox(height: 8),
+            ProbabilityBar(
+              modelPct: model,
+              impliedPct: implied,
+              color: isValue ? AppColors.primary : AppColors.primaryDark,
+            ),
+            const SizedBox(height: 5),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _kv('Model', '%$model'),
+                _kv('Oranın iması', implied != null ? '%$implied' : '-'),
+              ],
+            ),
+          ] else ...[
+            const SizedBox(height: 6),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _kv('Oranın iması', implied != null ? '%$implied' : '-'),
+                Text('Model: analiz bekliyor',
+                    style: AppText.sans(
+                        size: 10,
+                        weight: FontWeight.w600,
+                        color: AppColors.textSecondary)),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _kv(String k, String v) => Text.rich(TextSpan(children: [
+        TextSpan(
+            text: '$k: ',
+            style: AppText.sans(
+                size: 10, weight: FontWeight.w500, color: AppColors.textSecondary)),
+        TextSpan(text: v, style: AppText.mono(size: 10.5)),
+      ]));
+
+  Widget _analyzeCta(bool premium) {
+    return Column(
+      children: [
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: _runAnalysis,
+            icon: const Icon(Icons.auto_awesome, size: 18),
+            label: const Text('Model Analizini Getir'),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          premium
+              ? 'Premium: sınırsız analiz'
+              : 'Ücretsiz planda günlük analiz hakkınızla',
+          style: AppText.sans(
+              size: 10, weight: FontWeight.w500, color: AppColors.textMuted),
+        ),
+      ],
+    );
+  }
+
+  Widget _analyzingCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.surface2),
+      ),
+      child: Row(
+        children: [
+          const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary)),
+          const SizedBox(width: 14),
+          Expanded(
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 350),
+              child: Text(_stages[_stage],
+                  key: ValueKey(_stage),
+                  style: AppText.sans(size: 12.5, color: AppColors.textSecondary)),
+            ),
           ),
         ],
       ),
     );
   }
-}
 
-class _EmptyOdds extends StatelessWidget {
-  const _EmptyOdds();
-  @override
-  Widget build(BuildContext context) => const Center(
-        child: Padding(
-          padding: EdgeInsets.all(24),
-          child: Text('Bu maç için oran bilgisi bulunamadı.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: AppColors.textSecondary)),
-        ),
-      );
-}
-
-class _StatsTab extends StatelessWidget {
-  final Map<String, dynamic> stats;
-  const _StatsTab({required this.stats});
-
-  @override
-  Widget build(BuildContext context) {
-    if (stats.isEmpty) {
-      return const Center(
-        child: Padding(
-          padding: EdgeInsets.all(24),
-          child: Text(
-            'Bu maç için henüz karşılaştırma verisi çekilmemiş.\n'
-            'AI Analiz sekmesinden analiz başlatırsanız veriler toplanır.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: AppColors.textSecondary),
+  Widget _reasonsCard(Analysis a) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.accentFaint,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.accentDim),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text('MODEL NEDEN BÖYLE DÜŞÜNÜYOR?',
+                    style: AppText.sans(
+                        size: 10.5,
+                        weight: FontWeight.w800,
+                        color: AppColors.primary,
+                        letterSpacing: 0.8)),
+              ),
+              if (a.confidence != null)
+                Text('Güven: ${a.confidence}/10',
+                    style: AppText.mono(size: 10.5, color: AppColors.primary)),
+            ],
           ),
-        ),
-      );
-    }
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: stats.entries.map((e) {
-        return Card(
-          child: Padding(
+          const SizedBox(height: 10),
+          if (a.reasons.isNotEmpty)
+            ...a.reasons.map((r) => Padding(
+                  padding: const EdgeInsets.only(bottom: 7),
+                  child: Text.rich(TextSpan(children: [
+                    TextSpan(
+                        text: '${r.tag}: ',
+                        style: AppText.sans(size: 12, weight: FontWeight.w800)),
+                    TextSpan(
+                        text: r.text,
+                        style: AppText.sans(
+                            size: 12,
+                            weight: FontWeight.w500,
+                            color: AppColors.textPrimary)),
+                  ])),
+                ))
+          else if (a.generalNote != null)
+            Text(a.generalNote!,
+                style: AppText.sans(
+                    size: 12, weight: FontWeight.w500, color: AppColors.textPrimary)),
+        ],
+      ),
+    );
+  }
+
+  Widget _formSection(MatchStats stats, String home, String away) {
+    Widget box(String team, TeamForm f) => Expanded(
+          child: Container(
             padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.surface2),
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(_statTitle(e.key),
-                    style: const TextStyle(
-                        fontWeight: FontWeight.bold, color: AppColors.accent)),
-                const SizedBox(height: 6),
-                Text(e.value.toString(),
-                    style: const TextStyle(
-                        color: AppColors.textSecondary, fontSize: 12)),
+                Text('$team · son 5',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppText.sans(
+                        size: 10, weight: FontWeight.w700, color: AppColors.textSecondary)),
+                const SizedBox(height: 8),
+                Row(
+                  children: f.results
+                      .map((l) => Padding(
+                            padding: const EdgeInsets.only(right: 4),
+                            child: FormChip(letter: l),
+                          ))
+                      .toList(),
+                ),
+                if (f.note != null) ...[
+                  const SizedBox(height: 7),
+                  Text(f.note!,
+                      style: AppText.sans(
+                          size: 10.5,
+                          weight: FontWeight.w500,
+                          color: AppColors.textSecondary)),
+                ],
               ],
             ),
           ),
         );
-      }).toList(),
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        box(home, stats.formHome),
+        const SizedBox(width: 9),
+        box(away, stats.formAway),
+      ],
     );
   }
 
-  String _statTitle(String key) {
-    switch (key) {
-      case 'h2h':
-        return 'Aralarındaki Maçlar (H2H)';
-      case 'form_home':
-        return 'Ev Sahibi Form';
-      case 'form_away':
-        return 'Deplasman Form';
-      case 'standings':
-        return 'Puan Durumu';
-      default:
-        return key;
+  Widget _h2hRow(H2hItem h) {
+    final color = h.win == 'd' ? AppColors.textSecondary : AppColors.textPrimary;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.surface2),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+              width: 54,
+              child: Text(h.date,
+                  style: AppText.mono(size: 10, weight: FontWeight.w500, color: AppColors.textMuted))),
+          Expanded(
+            child: Text(h.fixture,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppText.sans(size: 11.5, weight: FontWeight.w600)),
+          ),
+          Text(h.score, style: AppText.mono(size: 12, color: color)),
+        ],
+      ),
+    );
+  }
+
+  Widget _sectionHead(String title, {String? trailing}) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Expanded(child: Text(title.toUpperCase(), style: AppText.section())),
+        if (trailing != null)
+          Text(trailing,
+              style: AppText.sans(
+                  size: 9.5, weight: FontWeight.w500, color: AppColors.textMuted)),
+      ],
+    );
+  }
+
+  Map<String, int> _impliedMs(Map<String, double> odds) {
+    final o1 = odds['MS1'], ox = odds['MSX'], o2 = odds['MS2'];
+    if (o1 == null || ox == null || o2 == null || o1 <= 0 || ox <= 0 || o2 <= 0) {
+      return {};
     }
+    final i1 = 1 / o1, ix = 1 / ox, i2 = 1 / o2;
+    final s = i1 + ix + i2;
+    return {
+      'MS1': (i1 / s * 100).round(),
+      'MSX': (ix / s * 100).round(),
+      'MS2': (i2 / s * 100).round(),
+    };
+  }
+}
+
+/// "Tüm Marketler" genişleyebilir bölümü.
+class _AllMarkets extends StatefulWidget {
+  final int count;
+  final List markets;
+  const _AllMarkets({required this.count, required this.markets});
+  @override
+  State<_AllMarkets> createState() => _AllMarketsState();
+}
+
+class _AllMarketsState extends State<_AllMarkets> {
+  bool _open = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        GestureDetector(
+          onTap: () => setState(() => _open = !_open),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text('TÜM MARKETLER (${widget.count})', style: AppText.section()),
+              ),
+              Icon(_open ? Icons.expand_less : Icons.expand_more,
+                  color: AppColors.textSecondary, size: 20),
+            ],
+          ),
+        ),
+        if (_open) ...[
+          const SizedBox(height: 8),
+          ...widget.markets.map((m) => Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppColors.surface,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.surface2),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(m.name,
+                        style: AppText.sans(size: 12.5, weight: FontWeight.w700)),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 7,
+                      runSpacing: 7,
+                      children: m.outcomes
+                          .map<Widget>((o) => ConstrainedBox(
+                                constraints: const BoxConstraints(minWidth: 74),
+                                child: OddsBox(label: o.label, value: o.odd, compact: true),
+                              ))
+                          .toList(),
+                    ),
+                  ],
+                ),
+              )),
+        ],
+      ],
+    );
   }
 }

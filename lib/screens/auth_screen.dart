@@ -56,14 +56,27 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Icon(Icons.insights, size: 56, color: AppColors.primary),
-                const SizedBox(height: 12),
-                const Text('MaçRadar',
+                Center(
+                  child: Container(
+                    width: 60,
+                    height: 60,
+                    decoration: BoxDecoration(
+                      gradient: AppColors.primaryGradient,
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text('MA',
+                        style: AppText.sans(
+                            size: 24,
+                            weight: FontWeight.w800,
+                            color: const Color(0xFF0A1410),
+                            letterSpacing: -0.5)),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Text('Maç Analiz',
                     textAlign: TextAlign.center,
-                    style: TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.primary)),
+                    style: AppText.sans(size: 26, weight: FontWeight.w800)),
                 const SizedBox(height: 4),
                 Text(_isLogin ? 'Tekrar hoş geldin' : 'Hemen kayıt ol',
                     textAlign: TextAlign.center,

@@ -2,12 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/theme.dart';
-import 'favorites_screen.dart';
-import 'fixtures_screen.dart';
-import 'profile_screen.dart';
-import 'stats_screen.dart';
+import 'account_screen.dart';
+import 'coupon_screen.dart';
+import 'matches_screen.dart';
+import 'my_analyses_screen.dart';
 
-/// Alt navigasyonlu ana kabuk.
+/// Alt navigasyonlu ana kabuk (Maçlar / Kupon / Analizlerim / Hesap).
 class HomeShell extends ConsumerStatefulWidget {
   const HomeShell({super.key});
   @override
@@ -17,40 +17,71 @@ class HomeShell extends ConsumerStatefulWidget {
 class _HomeShellState extends ConsumerState<HomeShell> {
   int _index = 0;
 
-  static const _titles = ['Bülten', 'Favoriler', 'İstatistik', 'Profil'];
   static const _pages = [
-    FixturesScreen(),
-    FavoritesScreen(),
-    StatsScreen(),
-    ProfileScreen(),
+    MatchesScreen(),
+    CouponScreen(),
+    MyAnalysesScreen(),
+    AccountScreen(),
   ];
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Row(
-          children: [
-            const Icon(Icons.insights, color: AppColors.primary),
-            const SizedBox(width: 8),
-            Text(_titles[_index]),
-          ],
-        ),
+      body: SafeArea(
+        bottom: false,
+        top: false,
+        child: IndexedStack(index: _index, children: _pages),
       ),
-      body: IndexedStack(index: _index, children: _pages),
-      bottomNavigationBar: NavigationBar(
-        backgroundColor: AppColors.surface,
-        indicatorColor: AppColors.primary.withValues(alpha: 0.2),
-        selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
-        destinations: const [
-          NavigationDestination(
-              icon: Icon(Icons.sports_soccer), label: 'Bülten'),
-          NavigationDestination(icon: Icon(Icons.star), label: 'Favoriler'),
-          NavigationDestination(
-              icon: Icon(Icons.bar_chart), label: 'İstatistik'),
-          NavigationDestination(icon: Icon(Icons.person), label: 'Profil'),
-        ],
+      bottomNavigationBar: Container(
+        decoration: const BoxDecoration(
+          color: Color(0xFF0A0F15),
+          border: Border(top: BorderSide(color: AppColors.surface2)),
+        ),
+        child: NavigationBarTheme(
+          data: NavigationBarThemeData(
+            backgroundColor: Colors.transparent,
+            indicatorColor: AppColors.primary.withValues(alpha: 0.16),
+            labelTextStyle: WidgetStateProperty.resolveWith((states) {
+              final selected = states.contains(WidgetState.selected);
+              return AppText.sans(
+                size: 10,
+                weight: FontWeight.w700,
+                color: selected ? AppColors.primary : AppColors.textSecondary,
+              );
+            }),
+            iconTheme: WidgetStateProperty.resolveWith((states) {
+              final selected = states.contains(WidgetState.selected);
+              return IconThemeData(
+                color: selected ? AppColors.primary : AppColors.textSecondary,
+                size: 22,
+              );
+            }),
+          ),
+          child: NavigationBar(
+            height: 64,
+            labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+            selectedIndex: _index,
+            onDestinationSelected: (i) => setState(() => _index = i),
+            destinations: const [
+              NavigationDestination(
+                  icon: Icon(Icons.public_outlined),
+                  selectedIcon: Icon(Icons.public),
+                  label: 'Maçlar'),
+              NavigationDestination(
+                  icon: Icon(Icons.confirmation_num_outlined),
+                  selectedIcon: Icon(Icons.confirmation_num),
+                  label: 'Kupon'),
+              NavigationDestination(
+                  icon: Icon(Icons.bar_chart_outlined),
+                  selectedIcon: Icon(Icons.bar_chart),
+                  label: 'Analizlerim'),
+              NavigationDestination(
+                  icon: Icon(Icons.person_outline),
+                  selectedIcon: Icon(Icons.person),
+                  label: 'Hesap'),
+            ],
+          ),
+        ),
       ),
     );
   }

@@ -1,228 +1,172 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 import '../core/theme.dart';
 import '../models/match.dart';
-import 'odds_box.dart';
+import 'badges.dart';
 
-/// Bülten/favori listelerinde tek maç kartı (profesyonel tasarım, belirgin oranlar).
+/// Bülten/canlı listelerinde tek maç kartı (Maç Analiz tasarımı).
 class MatchCard extends StatelessWidget {
   final MatchItem match;
   final VoidCallback onTap;
-  const MatchCard({super.key, required this.match, required this.onTap});
+  final bool premium;
+  const MatchCard({
+    super.key,
+    required this.match,
+    required this.onTap,
+    this.premium = false,
+  });
 
   bool get _isLive => match.status == 'live';
 
-  String get _time {
+  String get _dayTime {
     final s = match.startTime;
     if (s == null) return '--:--';
     final dt = DateTime.tryParse(s.replaceFirst(' ', 'T'));
     if (dt == null) return '--:--';
-    return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final d = DateTime(dt.year, dt.month, dt.day);
+    final diff = d.difference(today).inDays;
+    final time =
+        '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    if (diff == 0) return 'Bugün $time';
+    if (diff == 1) return 'Yarın $time';
+    return '${DateFormat('d MMM', 'tr_TR').format(dt)} $time';
   }
 
   @override
   Widget build(BuildContext context) {
+    final sig = match.signal;
+    final showValue = premium && sig != null && sig.hasValue;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 5),
+      padding: const EdgeInsets.only(bottom: 10),
       child: Material(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(18),
+        color: Colors.transparent,
         child: InkWell(
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: BorderRadius.circular(14),
           onTap: onTap,
-          child: Container(
+          child: Ink(
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(18),
+              gradient: AppColors.cardGradient,
+              borderRadius: BorderRadius.circular(14),
               border: Border.all(color: AppColors.surface2),
+              boxShadow: const [
+                BoxShadow(color: Color(0x40000000), blurRadius: 8, offset: Offset(0, 2)),
+              ],
             ),
-            padding: const EdgeInsets.all(14),
+            padding: const EdgeInsets.fromLTRB(14, 13, 14, 13),
             child: Column(
               children: [
-                _topRow(),
-                const SizedBox(height: 10),
                 Row(
                   children: [
-                    Expanded(child: _teams()),
+                    Expanded(
+                      child: Text(
+                        (match.league?.name ?? 'Lig').toUpperCase(),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppText.sans(
+                          size: 9.5,
+                          weight: FontWeight.w600,
+                          color: AppColors.textSecondary,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                    if (showValue) ...[
+                      const SizedBox(width: 6),
+                      const ValueBadge(),
+                    ],
                     const SizedBox(width: 8),
-                    _score(),
+                    if (_isLive)
+                      LiveMinute(minute: match.minute)
+                    else
+                      Text(_dayTime, style: AppText.mono(size: 10.5, color: AppColors.textPrimary)),
                   ],
                 ),
-                const SizedBox(height: 12),
-                _oddsRow(),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _topRow() {
-    return Row(
-      children: [
-        Expanded(
-          child: Row(
-            children: [
-              const Icon(Icons.emoji_events, size: 13, color: AppColors.accent),
-              const SizedBox(width: 5),
-              Flexible(
-                child: Text(
-                  match.league?.name ?? 'Lig',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      color: AppColors.textSecondary,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600),
+                const SizedBox(height: 10),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(match.home.name ?? '-',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppText.sans(size: 14, weight: FontWeight.w700)),
+                          const SizedBox(height: 5),
+                          Text(match.away.name ?? '-',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppText.sans(size: 14, weight: FontWeight.w700)),
+                        ],
+                      ),
+                    ),
+                    if (_isLive && match.score != null) ...[
+                      const SizedBox(width: 10),
+                      Column(
+                        children: [
+                          Text('${match.score!.home}', style: AppText.mono(size: 16)),
+                          const SizedBox(height: 5),
+                          Text('${match.score!.away}', style: AppText.mono(size: 16)),
+                        ],
+                      ),
+                    ],
+                  ],
                 ),
-              ),
-            ],
-          ),
-        ),
-        if (match.iddaaCode != null) ...[
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-            decoration: BoxDecoration(
-              color: AppColors.surface2,
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Text(match.iddaaCode!,
-                style: const TextStyle(
-                    color: AppColors.textSecondary, fontSize: 10)),
-          ),
-          const SizedBox(width: 6),
-        ],
-        if (_isLive)
-          _badge('CANLI', AppColors.danger, dot: true)
-        else if (match.hasAnalysis)
-          _badge('AI', AppColors.primary, icon: Icons.auto_awesome)
-        else
-          Text(_time,
-              style: const TextStyle(
-                  color: AppColors.textPrimary,
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold)),
-      ],
-    );
-  }
-
-  Widget _teams() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _teamRow(match.home.name ?? '-'),
-        const SizedBox(height: 8),
-        _teamRow(match.away.name ?? '-'),
-      ],
-    );
-  }
-
-  Widget _teamRow(String name) {
-    return Row(
-      children: [
-        Container(
-          width: 22,
-          height: 22,
-          decoration: BoxDecoration(
-            color: AppColors.surface2,
-            borderRadius: BorderRadius.circular(6),
-          ),
-          alignment: Alignment.center,
-          child: Text(
-            name.isNotEmpty ? name.substring(0, 1).toUpperCase() : '?',
-            style: const TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.bold,
-                color: AppColors.textSecondary),
-          ),
-        ),
-        const SizedBox(width: 9),
-        Expanded(
-          child: Text(name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                  fontWeight: FontWeight.w600, fontSize: 14.5)),
-        ),
-      ],
-    );
-  }
-
-  Widget _score() {
-    if (match.score != null) {
-      return Column(
-        children: [
-          Text('${match.score!.home}',
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 17)),
-          const SizedBox(height: 8),
-          Text('${match.score!.away}',
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 17)),
-        ],
-      );
-    }
-    return const SizedBox.shrink();
-  }
-
-  Widget _oddsRow() {
-    return Row(
-      children: [
-        Expanded(child: OddsBox(label: 'MS 1', value: match.odds['MS1'])),
-        const SizedBox(width: 7),
-        Expanded(child: OddsBox(label: 'MS X', value: match.odds['MSX'])),
-        const SizedBox(width: 7),
-        Expanded(child: OddsBox(label: 'MS 2', value: match.odds['MS2'])),
-        const SizedBox(width: 7),
-        Expanded(
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 9),
-            decoration: BoxDecoration(
-              color: AppColors.surface2,
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: const Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.bar_chart, size: 14, color: AppColors.accent),
-                SizedBox(height: 2),
-                Text('Detay',
-                    style: TextStyle(
-                        color: AppColors.accent,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w700)),
+                const SizedBox(height: 11),
+                Row(
+                  children: [
+                    _oddCell('1', match.odds['MS1'], sig, 'MS1'),
+                    const SizedBox(width: 8),
+                    _oddCell('X', match.odds['MSX'], sig, 'MSX'),
+                    const SizedBox(width: 8),
+                    _oddCell('2', match.odds['MS2'], sig, 'MS2'),
+                  ],
+                ),
               ],
             ),
           ),
         ),
-      ],
+      ),
     );
   }
 
-  Widget _badge(String text, Color color, {bool dot = false, IconData? icon}) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.15),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (dot) ...[
-            Container(
-                width: 6,
-                height: 6,
-                decoration:
-                    BoxDecoration(color: color, shape: BoxShape.circle)),
-            const SizedBox(width: 4),
+  Widget _oddCell(String label, double? value, MatchSignal? sig, String code) {
+    final isFav = premium && sig != null && sig.pick == code;
+    final isValue = premium && sig != null && sig.hasValue && sig.pick == code;
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        decoration: BoxDecoration(
+          color: AppColors.oddCell,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: isFav ? AppColors.primary : AppColors.oddBorder,
+            width: 1.5,
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(label,
+                style: AppText.sans(
+                    size: 9,
+                    weight: FontWeight.w600,
+                    color: AppColors.textSecondary,
+                    letterSpacing: 0.8)),
+            const SizedBox(height: 2),
+            Text(
+              value != null ? value.toStringAsFixed(2) : '-',
+              style: AppText.mono(
+                size: 14.5,
+                color: isValue ? AppColors.primary : AppColors.textPrimary,
+              ),
+            ),
           ],
-          if (icon != null) ...[
-            Icon(icon, size: 11, color: color),
-            const SizedBox(width: 3),
-          ],
-          Text(text,
-              style: TextStyle(
-                  color: color, fontSize: 10, fontWeight: FontWeight.bold)),
-        ],
+        ),
       ),
     );
   }

@@ -129,9 +129,15 @@ class AnalysisEngine
             . "gerçekçi bir kazanma olasılığı (yüzde) ve kısa, veriye dayalı bir gerekçe üretmek. Abartma, "
             . "veriye sadık kal. Yanıtını YALNIZCA aşağıdaki JSON şemasında ver:\n"
             . '{"markets":[{"market":"MS1","oran":2.10,"olasilik":45,"gerekce":"..."}],'
-            . '"genel_analiz":"...","en_guvenli_tahmin":"ALT25","surpriz_potansiyeli":"dusuk|orta|yuksek","riskli":false}'
-            . "\nmarket kodları: MS1,MSX,MS2,CS1X,CS12,CSX2,ALT25,UST25,KGVAR,KGYOK. olasilik 0-100 arası tam sayı. "
-            . "Sadece verilerde oranı bulunan marketleri değerlendir.";
+            . '"genel_analiz":"...","en_guvenli_tahmin":"MS1","surpriz_potansiyeli":"dusuk|orta|yuksek","riskli":false,'
+            . '"guven":7,"nedenler":[{"etiket":"Form farkı","metin":"Ev sahibi son 5 maçta 13 puan topladı."}]}'
+            . "\nmarket kodları: MS1,MSX,MS2,CS1X,CS12,CSX2,ALT25,UST25,ALT15,UST15,ALT35,UST35,KGVAR,KGYOK. "
+            . "MS1, MSX, MS2 (maç sonucu) için MUTLAKA olasılık ver ve toplamları ~100 olsun. "
+            . "olasilik 0-100 arası tam sayı. Sadece verilerde oranı bulunan marketleri değerlendir. "
+            . "'guven': analizine olan güvenin 1-10 arası tam sayı. "
+            . "'nedenler': modelin bu maçı neden böyle değerlendirdiğini açıklayan 3-4 maddelik liste; "
+            . "her madde {etiket, metin} — etiket kısa başlık (ör. 'Form farkı', 'İç saha gücü', 'Oran farkı'), "
+            . "metin 1-2 cümlelik veriye dayalı açıklama.";
     }
 
     private function buildUserPrompt(array $match, array $odds, array $stats): string

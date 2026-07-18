@@ -34,6 +34,31 @@ class MatchScore {
       );
 }
 
+/// Bültende bir maça ait model sinyali: en iyi MS seçimi + değer marjı.
+class MatchSignal {
+  final String pick; // MS1 / MSX / MS2
+  final int? modelPct;
+  final int? impliedPct;
+  final int? edge;
+  final bool hasValue;
+
+  MatchSignal({
+    required this.pick,
+    this.modelPct,
+    this.impliedPct,
+    this.edge,
+    this.hasValue = false,
+  });
+
+  factory MatchSignal.fromJson(Map<String, dynamic> j) => MatchSignal(
+        pick: j['pick']?.toString() ?? 'MS1',
+        modelPct: (j['model_pct'] as num?)?.toInt(),
+        impliedPct: (j['implied_pct'] as num?)?.toInt(),
+        edge: (j['edge'] as num?)?.toInt(),
+        hasValue: j['has_value'] as bool? ?? false,
+      );
+}
+
 class MatchItem {
   final int id;
   final String? iddaaCode;
@@ -45,6 +70,7 @@ class MatchItem {
   final MatchScore? score;
   final Map<String, double?> odds;
   final bool hasAnalysis;
+  final MatchSignal? signal;
   final League? league;
 
   MatchItem({
@@ -58,8 +84,11 @@ class MatchItem {
     this.score,
     required this.odds,
     required this.hasAnalysis,
+    this.signal,
     this.league,
   });
+
+  bool get isLive => status == 'live';
 
   factory MatchItem.fromJson(Map<String, dynamic> j) => MatchItem(
         id: j['id'] as int,
@@ -78,6 +107,9 @@ class MatchItem {
               )
             : <String, double?>{},
         hasAnalysis: j['has_analysis'] as bool? ?? false,
+        signal: j['signal'] is Map
+            ? MatchSignal.fromJson(Map<String, dynamic>.from(j['signal']))
+            : null,
         league: j['league'] != null
             ? League.fromJson(Map<String, dynamic>.from(j['league']))
             : null,
