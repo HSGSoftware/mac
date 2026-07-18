@@ -11,9 +11,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     if ($action === 'save_selectors') {
         foreach ([
-            'scraper_base_url','scraper_user_agent',
+            'scraper_goapi_url','scraper_user_agent',
             'scraper_fixtures_json_url','scraper_fixtures_html_url',
-            'scraper_results_json_url','scraper_match_json_url',
+            'scraper_match_json_url',
+            'mk_idx_home','mk_idx_away','mk_idx_code','mk_idx_time','mk_idx_date',
+            'mk_idx_league','mk_idx_league_name','mk_idx_ms_home','mk_idx_ms_away',
+            'mk_idx_sport','mk_idx_odds',
             'xpath_fixture_row','xpath_home','xpath_away','xpath_time','xpath_ms1','xpath_msx','xpath_ms2',
         ] as $key) {
             if (isset($_POST[$key])) {
@@ -46,16 +49,22 @@ render_flash();
 
 <div class="card p-4 mb-4">
     <h5 class="text-light mb-3">Kaynak Ayarları</h5>
-    <p class="text-secondary small">Mackolik yapısı değişirse burada güncelleyin — kod değiştirmeye gerek yok. <code>{date}</code> ve <code>{id}</code> yer tutucuları desteklenir.</p>
+    <p class="text-secondary small">Birincil kaynak <strong>goapi.mackolik.com/livedata</strong>. <code>{date_dmy}</code> = GG/AA/YYYY, <code>{date}</code> = YYYY-AA-GG, <code>{id}</code> yer tutucuları desteklenir. Mackolik dizi formatı değişirse aşağıdaki indeksleri güncelleyin — kod değiştirmeye gerek yok.</p>
     <form method="post">
         <input type="hidden" name="csrf" value="<?= csrf_token() ?>">
         <div class="row g-2">
-            <div class="col-md-6"><label class="form-label">Base URL</label><input name="scraper_base_url" class="form-control" value="<?= e($s['scraper_base_url'] ?? '') ?>"></div>
-            <div class="col-md-6"><label class="form-label">User-Agent</label><input name="scraper_user_agent" class="form-control" value="<?= e($s['scraper_user_agent'] ?? '') ?>"></div>
-            <div class="col-md-6"><label class="form-label">Fixtures JSON URL (birincil)</label><input name="scraper_fixtures_json_url" class="form-control" value="<?= e($s['scraper_fixtures_json_url'] ?? '') ?>" placeholder="https://.../program?date={date}"></div>
-            <div class="col-md-6"><label class="form-label">Fixtures HTML URL (yedek)</label><input name="scraper_fixtures_html_url" class="form-control" value="<?= e($s['scraper_fixtures_html_url'] ?? '') ?>"></div>
-            <div class="col-md-6"><label class="form-label">Results JSON URL</label><input name="scraper_results_json_url" class="form-control" value="<?= e($s['scraper_results_json_url'] ?? '') ?>"></div>
+            <div class="col-md-8"><label class="form-label">goapi Fixtures URL (birincil)</label><input name="scraper_goapi_url" class="form-control" value="<?= e($s['scraper_goapi_url'] ?? 'http://goapi.mackolik.com/livedata?date={date_dmy}') ?>"></div>
+            <div class="col-md-4"><label class="form-label">User-Agent</label><input name="scraper_user_agent" class="form-control" value="<?= e($s['scraper_user_agent'] ?? '') ?>"></div>
+            <div class="col-md-6"><label class="form-label">Özel Fixtures JSON URL (opsiyonel)</label><input name="scraper_fixtures_json_url" class="form-control" value="<?= e($s['scraper_fixtures_json_url'] ?? '') ?>"></div>
+            <div class="col-md-6"><label class="form-label">Fixtures HTML URL (son çare)</label><input name="scraper_fixtures_html_url" class="form-control" value="<?= e($s['scraper_fixtures_html_url'] ?? '') ?>"></div>
             <div class="col-md-6"><label class="form-label">Maç detay/istatistik JSON URL</label><input name="scraper_match_json_url" class="form-control" value="<?= e($s['scraper_match_json_url'] ?? '') ?>" placeholder="https://.../match/{id}"></div>
+        </div>
+        <h6 class="text-light mt-3">goapi Dizi İndeksleri (boş = varsayılan)</h6>
+        <p class="text-secondary small">Scraper her çekimde ilk maçın ham dizisini "mackolik_debug" log'una yazar; oradaki konumlara göre gerekirse düzeltin. Varsayılanlar: ev=2, dep=4, kod=14, saat=16, tarih=35, lig=36, lig_adı=9, MS_ev=29, MS_dep=30, spor=23, oran=1.</p>
+        <div class="row g-2">
+            <?php foreach (['home'=>'Ev','away'=>'Dep','code'=>'Kod','time'=>'Saat','date'=>'Tarih','league'=>'Lig','league_name'=>'Lig adı','ms_home'=>'MS ev','ms_away'=>'MS dep','sport'=>'Spor','odds'=>'Oran'] as $k=>$lbl): ?>
+            <div class="col-6 col-md-2"><label class="form-label small"><?= $lbl ?></label><input name="mk_idx_<?= $k ?>" class="form-control form-control-sm" value="<?= e($s['mk_idx_'.$k] ?? '') ?>" placeholder="varsayılan"></div>
+            <?php endforeach; ?>
         </div>
         <h6 class="text-light mt-3">HTML Yedek — XPath Seçicileri</h6>
         <div class="row g-2">
@@ -82,7 +91,7 @@ render_flash();
                 <td><span class="badge bg-<?= $l['status']==='success'?'success':($l['status']==='partial'?'warning':'danger') ?>"><?= e($l['status']) ?></span></td>
                 <td><?= (int)$l['items_count'] ?></td>
                 <td><?= $l['duration_ms']!==null ? (int)$l['duration_ms'].'ms' : '-' ?></td>
-                <td><small><?= e(mb_substr((string)$l['message'],0,120)) ?></small></td>
+                <td style="max-width:520px;word-break:break-all;"><small><?= e(mb_substr((string)$l['message'],0,1000)) ?></small></td>
                 <td><small><?= e($l['created_at']) ?></small></td>
             </tr>
         <?php endforeach; ?>
