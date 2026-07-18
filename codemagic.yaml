@@ -9,10 +9,12 @@ workflows:
       vars:
         # Canlı backend adresiniz. Codemagic > Environment variables'tan da geçebilirsiniz.
         API_BASE_URL: "https://alanadiniz.com/api/v1"
-      # Keystore imzalama için Codemagic'te "android_keystore" referansı tanımlayın:
+      # İMZALAMA (opsiyonel): Play Store'a yükleyecekseniz Codemagic'te bir değişken
+      # grubu (ör. "android_keystore") oluşturup şu değişkenleri ekleyin:
       #   CM_KEYSTORE_PATH, CM_KEY_ALIAS, CM_KEYSTORE_PASSWORD, CM_KEY_PASSWORD
-      groups:
-        - android_keystore
+      # Ardından aşağıdaki 2 satırın yorumunu kaldırın:
+      # groups:
+      #   - android_keystore
     working_directory: app
     scripts:
       - name: Flutter sürümü
@@ -51,37 +53,3 @@ workflows:
         notify:
           success: true
           failure: true
-
-  ios-release:
-    name: MaçRadar iOS
-    instance_type: mac_mini_m2
-    max_build_duration: 90
-    environment:
-      flutter: stable
-      xcode: latest
-      vars:
-        API_BASE_URL: "https://alanadiniz.com/api/v1"
-      # iOS imzalama: Codemagic > Code signing identities ile App Store Connect entegrasyonu
-      # ve bundle id (com.macradar.app) ekleyin; ardından aşağıdaki grubu tanımlayın.
-      # groups:
-      #   - ios_signing
-    working_directory: app
-    scripts:
-      - name: iOS platformunu hazırla
-        script: |
-          if [ ! -d ios ]; then
-            flutter create --platforms=ios --org com.macradar --project-name macradar .
-          fi
-      - name: Bağımlılıklar
-        script: flutter pub get
-      - name: Statik analiz
-        script: flutter analyze || true
-      - name: IPA derle (imzasız — imza için code signing yapılandırın)
-        script: |
-          flutter build ios --release --no-codesign --dart-define=API_BASE_URL=$API_BASE_URL
-    artifacts:
-      - build/ios/iphoneos/*.app
-    publishing:
-      email:
-        recipients:
-          - hrnbydgn@gmail.com

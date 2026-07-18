@@ -110,11 +110,13 @@ flutter run --dart-define=API_BASE_URL=https://alanadiniz.com/api/v1
 
 ## Codemagic ile build
 
-`codemagic.yaml` iki workflow içerir:
-- **android-release:** `flutter build apk/appbundle` → APK + AAB artifact. Keystore imzalama için Codemagic'te `android_keystore` grubu (`CM_KEYSTORE_PATH`, `CM_KEY_ALIAS`, `CM_KEYSTORE_PASSWORD`, `CM_KEY_PASSWORD`) tanımlayın.
-- **ios-release:** iOS platformunu scaffold eder ve `flutter build ios` çalıştırır (imza için Codemagic code signing'i bağlayın).
+`codemagic.yaml` şu an yalnızca **Android** build içerir:
+- **android-release:** `flutter build apk/appbundle` → APK + AAB artifact.
+- İmza kurmadan da çalışır: keystore yoksa release APK debug anahtarıyla imzalanır (test derlemeleri için). Play Store'a yükleyecekseniz Codemagic'te bir değişken grubu (ör. `android_keystore`) oluşturup `CM_KEYSTORE_PATH`, `CM_KEY_ALIAS`, `CM_KEYSTORE_PASSWORD`, `CM_KEY_PASSWORD` ekleyin ve `codemagic.yaml`'daki `groups` satırlarının yorumunu kaldırın.
 
 API adresi `API_BASE_URL` environment variable'ı ile derleme zamanında enjekte edilir. Gradle wrapper CI'da otomatik üretilir.
+
+> iOS build'i şimdilik dahil değil; gerektiğinde eklenecek.
 
 ## API uçları
 
