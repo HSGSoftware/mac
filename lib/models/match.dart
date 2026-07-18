@@ -72,10 +72,11 @@ class MatchItem {
         score: j['score'] != null
             ? MatchScore.fromJson(Map<String, dynamic>.from(j['score']))
             : null,
-        odds: (j['odds'] as Map?)?.map(
-              (k, v) => MapEntry(k as String, (v as num?)?.toDouble()),
-            ) ??
-            {},
+        odds: j['odds'] is Map
+            ? (j['odds'] as Map).map(
+                (k, v) => MapEntry(k.toString(), (v as num?)?.toDouble()),
+              )
+            : <String, double?>{},
         hasAnalysis: j['has_analysis'] as bool? ?? false,
         league: j['league'] != null
             ? League.fromJson(Map<String, dynamic>.from(j['league']))

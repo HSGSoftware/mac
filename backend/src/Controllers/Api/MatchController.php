@@ -84,8 +84,9 @@ class MatchController
 
         Response::ok([
             'match' => $this->presentDetail($row),
-            'odds' => $odds,
-            'stats' => $stats,
+            // Boş dizi PHP'de JSON [] üretir; istemci Map beklediği için obje olarak gönder.
+            'odds' => (object) $odds,
+            'stats' => (object) $stats,
             'analysis' => $analysis ? $this->presentAnalysis($analysis) : null,
         ]);
     }

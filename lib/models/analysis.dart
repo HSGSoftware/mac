@@ -87,15 +87,20 @@ class MatchDetail {
     this.analysis,
   });
 
-  factory MatchDetail.fromJson(Map<String, dynamic> j) => MatchDetail(
-        match: Map<String, dynamic>.from(j['match'] ?? {}),
-        odds: (j['odds'] as Map?)?.map(
-              (k, v) => MapEntry(k as String, (v as num).toDouble()),
-            ) ??
-            {},
-        stats: Map<String, dynamic>.from(j['stats'] ?? {}),
-        analysis: j['analysis'] != null
-            ? Analysis.fromJson(Map<String, dynamic>.from(j['analysis']))
-            : null,
-      );
+  factory MatchDetail.fromJson(Map<String, dynamic> j) {
+    final odds = <String, double>{};
+    if (j['odds'] is Map) {
+      (j['odds'] as Map).forEach((k, v) {
+        if (v is num) odds[k.toString()] = v.toDouble();
+      });
+    }
+    return MatchDetail(
+      match: j['match'] is Map ? Map<String, dynamic>.from(j['match']) : {},
+      odds: odds,
+      stats: j['stats'] is Map ? Map<String, dynamic>.from(j['stats']) : {},
+      analysis: j['analysis'] is Map
+          ? Analysis.fromJson(Map<String, dynamic>.from(j['analysis']))
+          : null,
+    );
+  }
 }
