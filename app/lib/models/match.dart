@@ -1,0 +1,98 @@
+class League {
+  final int? id;
+  final String? name;
+  final String? country;
+
+  League({this.id, this.name, this.country});
+
+  factory League.fromJson(Map<String, dynamic> j) => League(
+        id: j['id'] as int?,
+        name: j['name'] as String?,
+        country: j['country'] as String?,
+      );
+}
+
+class TeamSide {
+  final String? name;
+  final String? logo;
+  TeamSide({this.name, this.logo});
+  factory TeamSide.fromJson(Map<String, dynamic> j) =>
+      TeamSide(name: j['name'] as String?, logo: j['logo'] as String?);
+}
+
+class MatchScore {
+  final int home;
+  final int away;
+  final int? htHome;
+  final int? htAway;
+  MatchScore({required this.home, required this.away, this.htHome, this.htAway});
+  factory MatchScore.fromJson(Map<String, dynamic> j) => MatchScore(
+        home: j['home'] as int,
+        away: j['away'] as int,
+        htHome: j['ht_home'] as int?,
+        htAway: j['ht_away'] as int?,
+      );
+}
+
+class MatchItem {
+  final int id;
+  final String? iddaaCode;
+  final String? startTime;
+  final String status;
+  final String? minute;
+  final TeamSide home;
+  final TeamSide away;
+  final MatchScore? score;
+  final Map<String, double?> odds;
+  final bool hasAnalysis;
+  final League? league;
+
+  MatchItem({
+    required this.id,
+    this.iddaaCode,
+    this.startTime,
+    required this.status,
+    this.minute,
+    required this.home,
+    required this.away,
+    this.score,
+    required this.odds,
+    required this.hasAnalysis,
+    this.league,
+  });
+
+  factory MatchItem.fromJson(Map<String, dynamic> j) => MatchItem(
+        id: j['id'] as int,
+        iddaaCode: j['iddaa_code'] as String?,
+        startTime: j['start_time'] as String?,
+        status: j['status'] as String? ?? 'scheduled',
+        minute: j['minute'] as String?,
+        home: TeamSide.fromJson(Map<String, dynamic>.from(j['home'] ?? {})),
+        away: TeamSide.fromJson(Map<String, dynamic>.from(j['away'] ?? {})),
+        score: j['score'] != null
+            ? MatchScore.fromJson(Map<String, dynamic>.from(j['score']))
+            : null,
+        odds: (j['odds'] as Map?)?.map(
+              (k, v) => MapEntry(k as String, (v as num?)?.toDouble()),
+            ) ??
+            {},
+        hasAnalysis: j['has_analysis'] as bool? ?? false,
+        league: j['league'] != null
+            ? League.fromJson(Map<String, dynamic>.from(j['league']))
+            : null,
+      );
+}
+
+/// Bülten: lige göre gruplanmış maçlar.
+class LeagueGroup {
+  final League league;
+  final List<MatchItem> matches;
+  LeagueGroup({required this.league, required this.matches});
+
+  factory LeagueGroup.fromJson(Map<String, dynamic> j) => LeagueGroup(
+        league: League.fromJson(Map<String, dynamic>.from(j['league'] ?? {})),
+        matches: ((j['matches'] as List?) ?? [])
+            .map((e) => MatchItem.fromJson(Map<String, dynamic>.from(e)))
+            .toList(),
+      );
+}

@@ -1,0 +1,17 @@
+{
+    "name": "macradar/backend",
+    "description": "MaçRadar - İddaa analiz platformu PHP backend (saf PHP, framework'süz)",
+    "type": "project",
+    "license": "proprietary",
+    "require": {
+        "php": ">=7.4"
+    },
+    "autoload": {
+        "psr-4": {
+            "MacRadar\\": "src/"
+        }
+    },
+    "config": {
+        "optimize-autoloader": true
+    }
+}

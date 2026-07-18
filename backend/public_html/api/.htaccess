@@ -1,0 +1,16 @@
+# Tüm /api/v1/* isteklerini index.php'ye yönlendir
+RewriteEngine On
+RewriteBase /api/
+
+# Gerçek dosya/klasör değilse index.php'ye
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^ index.php [QSA,L]
+
+# Authorization başlığını PHP'ye ilet (bazı cPanel sunucularında gerekli)
+RewriteCond %{HTTP:Authorization} .
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+</IfModule>
