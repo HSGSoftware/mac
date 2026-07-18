@@ -25,6 +25,9 @@ const Map<String, String> marketLabels = {
   'UST35': '3.5 Üst',
   'KGVAR': 'Karşılıklı Gol Var',
   'KGYOK': 'Karşılıklı Gol Yok',
+  'IY1': 'İlk Yarı 1 (Ev)',
+  'IYX': 'İlk Yarı X',
+  'IY2': 'İlk Yarı 2 (Dep.)',
 };
 
 String marketLabel(String code) => marketLabels[code] ?? code;

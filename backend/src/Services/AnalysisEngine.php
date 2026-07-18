@@ -124,20 +124,38 @@ class AnalysisEngine
 
     private function systemPrompt(): string
     {
-        return "Sen profesyonel bir futbol bahis analistisin. Görevin, verilen maç verilerini (takım formları, "
-            . "aralarındaki geçmiş maçlar, puan durumu ve güncel bahis oranları) inceleyip her bahis seçeneği için "
-            . "gerçekçi bir kazanma olasılığı (yüzde) ve kısa, veriye dayalı bir gerekçe üretmek. Abartma, "
-            . "veriye sadık kal. Yanıtını YALNIZCA aşağıdaki JSON şemasında ver:\n"
-            . '{"markets":[{"market":"MS1","oran":2.10,"olasilik":45,"gerekce":"..."}],'
-            . '"genel_analiz":"...","en_guvenli_tahmin":"MS1","surpriz_potansiyeli":"dusuk|orta|yuksek","riskli":false,'
+        return "Sen deneyimli, profesyonel bir futbol bahis analistisin. Görevin, sana verilen maç için "
+            . "LİSTELENEN TÜM BAHİS MARKETLERİNİ tek tek analiz edip her seçenek için gerçekçi bir olasılık "
+            . "ve kısa, veriye dayalı bir gerekçe üretmek.\n\n"
+            . "Analizinde ŞUNLARIN TAMAMINI hesaba kat:\n"
+            . "1) Verilen istatistikler: takım formları, aralarındaki geçmiş maçlar (H2H), puan durumu, canlı skor/dakika.\n"
+            . "2) KENDİ BİLGİN dahilinde bu iki takım hakkında bildiklerin: kadro kalitesi, sakat ve cezalı oyuncular, "
+            . "teknik direktör durumu, son dönem performansı, iç saha/deplasman karakteri. Güncel sakatlık bilgisinden "
+            . "emin değilsen tahmin uydurma; genel kadro gücü üzerinden değerlendir.\n"
+            . "3) Maçın bağlamı: lig sıralaması etkisi, şampiyonluk/küme düşme baskısı, derbi/rekabet, sezon dönemi, "
+            . "fikstür yoğunluğu ve olası rotasyon.\n"
+            . "4) Oranların ima ettiği olasılıklar (1/oran) ile kendi olasılıkların arasındaki fark (değer fırsatları).\n\n"
+            . "Yanıtını YALNIZCA şu JSON şemasında ver:\n"
+            . '{"markets":['
+            . '{"market":"MS1","oran":2.10,"olasilik":45,"gerekce":"..."},'
+            . '{"market":"Toplam Gol Aralığı","secenek":"2-3 Gol","oran":1.95,"olasilik":48,"gerekce":"..."}],'
+            . '"genel_analiz":"maçın 3-5 cümlelik bütünsel değerlendirmesi",'
+            . '"en_guvenli_tahmin":"MS1","surpriz_potansiyeli":"dusuk|orta|yuksek","riskli":false,'
             . '"guven":7,"nedenler":[{"etiket":"Form farkı","metin":"Ev sahibi son 5 maçta 13 puan topladı."}]}'
-            . "\nmarket kodları: MS1,MSX,MS2,CS1X,CS12,CSX2,ALT25,UST25,ALT15,UST15,ALT35,UST35,KGVAR,KGYOK. "
-            . "MS1, MSX, MS2 (maç sonucu) için MUTLAKA olasılık ver ve toplamları ~100 olsun. "
-            . "olasilik 0-100 arası tam sayı. Sadece verilerde oranı bulunan marketleri değerlendir. "
-            . "'guven': analizine olan güvenin 1-10 arası tam sayı. "
-            . "'nedenler': modelin bu maçı neden böyle değerlendirdiğini açıklayan 3-4 maddelik liste; "
-            . "her madde {etiket, metin} — etiket kısa başlık (ör. 'Form farkı', 'İç saha gücü', 'Oran farkı'), "
-            . "metin 1-2 cümlelik veriye dayalı açıklama.";
+            . "\n\nKURALLAR:\n"
+            . "- Standart marketlerde şu kodları kullan (secenek alanı gerekmez): MS1,MSX,MS2 (Maç Sonucu), "
+            . "CS1X,CS12,CSX2 (Çifte Şans), ALT15,UST15,ALT25,UST25,ALT35,UST35 (Gol Alt/Üst), KGVAR,KGYOK (Karşılıklı Gol), "
+            . "IY1,IYX,IY2 (İlk Yarı Sonucu).\n"
+            . "- DİĞER TÜM marketlerde 'market' alanına marketin verilen adını AYNEN, 'secenek' alanına seçeneğin adını AYNEN yaz "
+            . "ve verilen oranı 'oran' alanına koy.\n"
+            . "- Sana listelenen HER market için değerlendirme yap; her marketin TÜM seçeneklerine olasılık ver.\n"
+            . "- MS1+MSX+MS2 toplamı ~100 olsun; aynı marketin seçeneklerinin olasılık toplamı da ~100 olsun.\n"
+            . "- 'olasilik' 0-100 arası tam sayı. Oranı verilmeyen market uydurma.\n"
+            . "- 'gerekce' 1-2 cümle; somut ve veriye dayalı olsun ('form iyi' gibi boş laf değil).\n"
+            . "- 'guven': analizine olan güvenin (veri kalitesi + netlik), 1-10 arası tam sayı.\n"
+            . "- 'nedenler': 4-6 madde; form, H2H, sakat/cezalı ve kadro durumu, motivasyon/bağlam ve oran değeri "
+            . "başlıklarını kapsasın. Her madde {etiket, metin}; metin 1-2 cümlelik somut açıklama.\n"
+            . "- Abartma, veriye sadık kal; belirsizliği dürüstçe belirt.";
     }
 
     private function buildUserPrompt(array $match, array $odds, array $stats): string
@@ -158,15 +176,15 @@ class AnalysisEngine
             $lines[] = 'Analizini mevcut skoru ve kalan süreyi dikkate alarak yap (canlı bahis analizi).';
         }
         $lines[] = '';
-        $lines[] = 'Güncel oranlar:';
+        $lines[] = 'Ana marketler (kod: oran):';
         foreach ($odds as $market => $val) {
             $lines[] = "  - $market: $val";
         }
-        // Tüm marketlerden kısa özet (ilk 12 market) — AI'ya geniş bağlam
+        // TÜM marketler — hepsi analiz edilecek
         if (!empty($stats['markets']) && is_array($stats['markets'])) {
             $lines[] = '';
-            $lines[] = 'Diğer marketler (özet):';
-            foreach (array_slice($stats['markets'], 0, 12) as $mk) {
+            $lines[] = 'ANALİZ EDİLECEK TÜM MARKETLER (market adı → seçenek=oran):';
+            foreach ($stats['markets'] as $mk) {
                 if (!is_array($mk)) {
                     continue;
                 }
@@ -190,8 +208,13 @@ class AnalysisEngine
         if (!empty($stats['standings'])) {
             $lines[] = 'Puan durumu: ' . json_encode($stats['standings'], JSON_UNESCAPED_UNICODE);
         }
+        if (!empty($stats['injuries'])) {
+            $lines[] = 'Sakat/cezalı oyuncular (veri): ' . json_encode($stats['injuries'], JSON_UNESCAPED_UNICODE);
+        }
         $lines[] = '';
-        $lines[] = 'Her market için olasılık ve gerekçe içeren JSON döndür.';
+        $lines[] = 'Yukarıda listelenen TÜM marketleri analiz et. Takımlar hakkında kendi bilgini de kullan '
+            . '(kadro gücü, sakat/cezalı oyuncular, teknik direktör, motivasyon); emin olmadığın güncel bilgiyi uydurma. '
+            . 'Her market ve seçenek için olasılık + gerekçe içeren JSON döndür.';
         return implode("\n", $lines);
     }
 

@@ -117,10 +117,15 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
                       const SizedBox(height: 12),
                       _analyzingCard(),
                     ],
-                    if (analysis != null &&
-                        (analysis.reasons.isNotEmpty || analysis.generalNote != null)) ...[
+                    if (analysis != null) ...[
                       const SizedBox(height: 16),
-                      _reasonsCard(analysis),
+                      _summaryCard(analysis),
+                      if (analysis.reasons.isNotEmpty) ...[
+                        const SizedBox(height: 10),
+                        _reasonsCard(analysis),
+                      ],
+                      ..._valueSection(analysis),
+                      ..._marketAnalysesSection(analysis),
                     ],
                     if (isLive && stats.live.isNotEmpty) ...[
                       const SizedBox(height: 18),
@@ -398,6 +403,194 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
                   style: AppText.sans(size: 12.5, color: AppColors.textSecondary)),
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  /// AI genel değerlendirme kartı: yorum + en güvenli tahmin + sürpriz + güven.
+  Widget _summaryCard(Analysis a) {
+    Widget chip(IconData icon, String label, String value, {Color? color}) =>
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+          decoration: BoxDecoration(
+            color: AppColors.oddCell,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: AppColors.oddBorder),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 13, color: color ?? AppColors.textSecondary),
+              const SizedBox(width: 5),
+              Text('$label: ',
+                  style: AppText.sans(
+                      size: 10, weight: FontWeight.w500, color: AppColors.textSecondary)),
+              Text(value,
+                  style: AppText.sans(
+                      size: 10.5, weight: FontWeight.w800, color: color ?? AppColors.textPrimary)),
+            ],
+          ),
+        );
+
+    String surprise(String? s) {
+      switch (s) {
+        case 'dusuk':
+          return 'Düşük';
+        case 'orta':
+          return 'Orta';
+        case 'yuksek':
+          return 'Yüksek';
+        default:
+          return s ?? '-';
+      }
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.surface2),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.auto_awesome, size: 15, color: AppColors.primary),
+              const SizedBox(width: 7),
+              Expanded(
+                child: Text('AI GENEL DEĞERLENDİRME',
+                    style: AppText.sans(
+                        size: 10.5,
+                        weight: FontWeight.w800,
+                        color: AppColors.primary,
+                        letterSpacing: 0.8)),
+              ),
+              if (a.confidence != null)
+                Text('Güven ${a.confidence}/10',
+                    style: AppText.mono(size: 10.5, color: AppColors.primary)),
+            ],
+          ),
+          if (a.generalNote != null && a.generalNote!.isNotEmpty) ...[
+            const SizedBox(height: 9),
+            Text(a.generalNote!,
+                style: AppText.sans(
+                    size: 12.5,
+                    weight: FontWeight.w500,
+                    color: AppColors.textPrimary)),
+          ],
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 7,
+            runSpacing: 7,
+            children: [
+              if (a.safestPick != null)
+                chip(Icons.verified, 'En güvenli', marketLabel(a.safestPick!),
+                    color: AppColors.primary),
+              if (a.surpriseLevel != null)
+                chip(Icons.bolt, 'Sürpriz', surprise(a.surpriseLevel),
+                    color: AppColors.gold),
+              if (a.isRisky)
+                chip(Icons.warning_amber_rounded, 'Uyarı', 'Riskli maç',
+                    color: AppColors.danger),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Market analizi görünen adı: kod ise Türkçe etiket, değilse ad · seçenek.
+  String _maLabel(MarketAnalysis m) {
+    final known = marketLabels[m.market];
+    if (known != null) return known;
+    return (m.secenek != null && m.secenek!.isNotEmpty)
+        ? '${m.market} · ${m.secenek}'
+        : m.market;
+  }
+
+  /// "Değer fırsatları": modelin orandan yüksek olasılık verdiği seçimler.
+  List<Widget> _valueSection(Analysis a) {
+    final values = a.markets.where((m) => m.degerVarMi).toList()
+      ..sort((x, y) => (y.degerFarki ?? 0).compareTo(x.degerFarki ?? 0));
+    if (values.isEmpty) return const [];
+    return [
+      const SizedBox(height: 18),
+      _sectionHead('Değer fırsatları', trailing: 'model > oranın iması'),
+      const SizedBox(height: 9),
+      ...values.take(5).map((m) => _marketAnalysisCard(m, highlight: true)),
+    ];
+  }
+
+  /// Tüm market analizleri (MS zaten üstte bar olarak var; burada gerekçeleriyle hepsi).
+  List<Widget> _marketAnalysesSection(Analysis a) {
+    final rest = a.markets
+        .where((m) => m.olasilik != null && !m.degerVarMi)
+        .toList();
+    if (rest.isEmpty) return const [];
+    return [
+      const SizedBox(height: 18),
+      _sectionHead('Market analizleri (${a.markets.where((m) => m.olasilik != null).length})'),
+      const SizedBox(height: 9),
+      ...rest.map((m) => _marketAnalysisCard(m)),
+    ];
+  }
+
+  /// Tek market analizi kartı: ad + oran + olasılık barı + gerekçe.
+  Widget _marketAnalysisCard(MarketAnalysis m, {bool highlight = false}) {
+    final implied = m.impliedOlasilik?.round();
+    return Container(
+      margin: const EdgeInsets.only(bottom: 9),
+      padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+            color: highlight ? AppColors.primary : AppColors.surface2),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(_maLabel(m),
+                    style: AppText.sans(size: 12.5, weight: FontWeight.w700)),
+              ),
+              if (m.degerVarMi && m.degerFarki != null) ...[
+                ValueBadge(edge: m.degerFarki!.round()),
+                const SizedBox(width: 8),
+              ],
+              if (m.oran != null)
+                Text('@${m.oran!.toStringAsFixed(2)}', style: AppText.mono(size: 13)),
+            ],
+          ),
+          if (m.olasilik != null) ...[
+            const SizedBox(height: 8),
+            ProbabilityBar(
+              modelPct: m.olasilik!,
+              impliedPct: implied,
+              color: m.degerVarMi ? AppColors.primary : AppColors.primaryDark,
+            ),
+            const SizedBox(height: 5),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _kv('Model', '%${m.olasilik}'),
+                _kv('Oranın iması', implied != null ? '%$implied' : '-'),
+              ],
+            ),
+          ],
+          if (m.gerekce != null && m.gerekce!.isNotEmpty) ...[
+            const SizedBox(height: 7),
+            Text(m.gerekce!,
+                style: AppText.sans(
+                    size: 11,
+                    weight: FontWeight.w500,
+                    color: AppColors.textSecondary)),
+          ],
         ],
       ),
     );

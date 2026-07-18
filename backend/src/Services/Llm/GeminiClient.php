@@ -30,6 +30,8 @@ class GeminiClient implements LlmClientInterface
             'generationConfig' => [
                 'temperature' => 0.4,
                 'responseMimeType' => 'application/json',
+                // Tüm marketlerin analizi uzun JSON üretir; kesilmesin
+                'maxOutputTokens' => 8192,
             ],
         ];
         $res = HttpClient::postJson($url, $payload, [], 90);

@@ -1,5 +1,6 @@
 class MarketAnalysis {
   final String market;
+  final String? secenek; // kod dışı marketlerde seçenek adı (ör. "2-3 Gol")
   final double? oran;
   final int? olasilik;
   final double? impliedOlasilik;
@@ -9,6 +10,7 @@ class MarketAnalysis {
 
   MarketAnalysis({
     required this.market,
+    this.secenek,
     this.oran,
     this.olasilik,
     this.impliedOlasilik,
@@ -18,7 +20,8 @@ class MarketAnalysis {
   });
 
   factory MarketAnalysis.fromJson(Map<String, dynamic> j) => MarketAnalysis(
-        market: j['market'] as String? ?? '',
+        market: j['market']?.toString() ?? '',
+        secenek: j['secenek']?.toString(),
         oran: (j['oran'] as num?)?.toDouble(),
         olasilik: (j['olasilik'] as num?)?.toInt(),
         impliedOlasilik: (j['implied_olasilik'] as num?)?.toDouble(),
