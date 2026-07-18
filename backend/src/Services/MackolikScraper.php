@@ -55,8 +55,6 @@ class MackolikScraper
         $bultenUrl = (string) Settings::get('scraper_bulten_url', 'https://bulten.nesine.com/api/bulten/getprebultenfull');
         $res = HttpClient::get($bultenUrl, $this->headers(), 40);
         if ($res['status'] === 200 && $res['body']) {
-            ScrapeLogger::log('bulten_debug', 'success',
-                'Nesine ham yanıt (baş): ' . mb_substr($res['body'], 0, 1800), 0, null);
             $data = json_decode($res['body'], true);
             if (is_array($data)) {
                 $events = $this->findNesineEvents($data);
@@ -112,7 +110,18 @@ class MackolikScraper
             return ['error' => 'JSON çözülemedi', 'head' => mb_substr($res['body'], 0, 800)];
         }
         $events = $this->findNesineEvents($data);
-        $first = $events[0] ?? null;
+        // Oran yapısını göstermek için oranlı ilk futbol maçını seç
+        $first = null;
+        foreach ($events as $e) {
+            if (is_array($e) && (string) ($e['GT'] ?? '') === '1'
+                && !empty($e['MSA']) && is_array($e['MSA'])) {
+                $first = $e;
+                break;
+            }
+        }
+        if ($first === null) {
+            $first = $events[0] ?? null;
+        }
         return [
             'url' => $bultenUrl,
             'top_keys' => array_keys($data),
@@ -165,6 +174,7 @@ class MackolikScraper
     private function ingestNesine(array $events): int
     {
         $count = 0;
+        $logged = false;
         foreach ($events as $ev) {
             if (!is_array($ev)) {
                 continue;
@@ -178,6 +188,11 @@ class MackolikScraper
             $away = trim((string) ($ev['AN'] ?? ($ev['an'] ?? '')));
             if ($home === '' || $away === '') {
                 continue;
+            }
+            if (!$logged && !empty($ev['MSA'])) {
+                ScrapeLogger::log('bulten_debug', 'success',
+                    'İlk oranlı maç örneği: ' . mb_substr(json_encode($ev, JSON_UNESCAPED_UNICODE), 0, 1800), 0, null);
+                $logged = true;
             }
             $code = trim((string) ($ev['C'] ?? ($ev['c'] ?? '')));
             $leagueName = trim((string) ($ev['LN'] ?? ($ev['ln'] ?? 'Diğer'))) ?: 'Diğer';
@@ -198,7 +213,9 @@ class MackolikScraper
             ]);
 
             if ($matchId) {
-                $odds = $this->parseNesineMarkets($ev['MA'] ?? ($ev['ma'] ?? []));
+                // Marketler MSA dizisinde (MA çoğunlukla boş gelir)
+                $markets = $ev['MSA'] ?? ($ev['msa'] ?? ($ev['MA'] ?? []));
+                $odds = $this->parseNesineMarkets(is_array($markets) ? $markets : []);
                 if ($odds) {
                     $this->saveOdds($matchId, $odds);
                 }
@@ -209,7 +226,9 @@ class MackolikScraper
     }
 
     /**
-     * Nesine market listesini (MA) market koduna eşler. İsim tabanlı, dayanıklı.
+     * Nesine MSA market listesini market koduna eşler.
+     * Market adı = MN, seçenek adı = ON, seçenek sırası = N, oran = O, gol çizgisi = SOV.
+     * İsim + pozisyon tabanlı; dayanıklı.
      */
     private function parseNesineMarkets(array $markets): array
     {
@@ -218,79 +237,103 @@ class MackolikScraper
             if (!is_array($m)) {
                 continue;
             }
-            $name = mb_strtolower(trim((string) ($m['N'] ?? ($m['n'] ?? ($m['MTN'] ?? '')))), 'UTF-8');
-            $outcomes = $m['OCA'] ?? ($m['oca'] ?? []);
-            if (!is_array($outcomes) || empty($outcomes)) {
-                continue;
-            }
-            // Seçenekleri ad => oran eşlemesine çevir
-            $oc = [];
-            foreach ($outcomes as $o) {
-                if (!is_array($o)) {
-                    continue;
-                }
-                $on = mb_strtolower(trim((string) ($o['N'] ?? ($o['n'] ?? ($o['OCN'] ?? '')))), 'UTF-8');
-                $ov = $this->num((string) ($o['O'] ?? ($o['o'] ?? ($o['ODD'] ?? ($o['odd'] ?? '')))));
-                if ($on !== '' && $ov !== null) {
-                    $oc[$on] = $ov;
-                }
-            }
-            if (empty($oc)) {
+            $mn = mb_strtolower(trim((string) ($m['MN'] ?? ($m['N'] ?? ''))), 'UTF-8');
+            $sov = $m['SOV'] ?? 0;
+            $oca = $m['OCA'] ?? ($m['oca'] ?? []);
+            if (!is_array($oca) || empty($oca)) {
                 continue;
             }
 
-            $has = fn($k) => isset($oc[$k]);
-            $take = function (array $keys) use ($oc) {
+            // Seçenekleri hem ada (ON) hem pozisyona (N) göre indeksle
+            $byName = [];
+            $byPos = [];
+            foreach ($oca as $o) {
+                if (!is_array($o)) {
+                    continue;
+                }
+                $odd = $this->num((string) ($o['O'] ?? ($o['odd'] ?? '')));
+                if ($odd === null) {
+                    continue;
+                }
+                $on = mb_strtolower(trim((string) ($o['ON'] ?? '')), 'UTF-8');
+                if ($on !== '') {
+                    $byName[$on] = $odd;
+                }
+                if (isset($o['N'])) {
+                    $byPos[(string) $o['N']] = $odd;
+                }
+            }
+            if (empty($byName) && empty($byPos)) {
+                continue;
+            }
+            $nm = function (array $keys) use ($byName) {
                 foreach ($keys as $k) {
-                    if (isset($oc[$k])) {
-                        return $oc[$k];
+                    if (isset($byName[$k])) {
+                        return $byName[$k];
                     }
                 }
                 return null;
             };
+            $pos = fn($p) => $byPos[(string) $p] ?? null;
 
-            // Maç Sonucu (1-X-2)
-            if (strpos($name, 'maç sonucu') !== false || strpos($name, 'mac sonucu') !== false
-                || ($has('1') && ($has('x') || $has('0')) && $has('2'))) {
-                $this->put($out, 'MS1', $take(['1']));
-                $this->put($out, 'MSX', $take(['x', '0']));
-                $this->put($out, 'MS2', $take(['2']));
-            }
-            // Alt/Üst
-            if (strpos($name, 'alt') !== false || strpos($name, 'üst') !== false
-                || strpos($name, 'ust') !== false || strpos($name, 'gol') !== false) {
-                $altKeys = ['alt', 'a', 'under'];
-                $ustKeys = ['üst', 'ust', 'ü', 'u', 'over'];
-                if (strpos($name, '1,5') !== false || strpos($name, '1.5') !== false) {
-                    $this->put($out, 'ALT15', $take($altKeys));
-                    $this->put($out, 'UST15', $take($ustKeys));
-                } elseif (strpos($name, '2,5') !== false || strpos($name, '2.5') !== false) {
-                    $this->put($out, 'ALT25', $take($altKeys));
-                    $this->put($out, 'UST25', $take($ustKeys));
-                } elseif (strpos($name, '3,5') !== false || strpos($name, '3.5') !== false) {
-                    $this->put($out, 'ALT35', $take($altKeys));
-                    $this->put($out, 'UST35', $take($ustKeys));
+            $isMs = strpos($mn, 'maç sonucu') !== false || strpos($mn, 'mac sonucu') !== false;
+            $isIy = (strpos($mn, 'ilk yarı') !== false || strpos($mn, 'i̇lk yarı') !== false || strpos($mn, '1. yarı') !== false)
+                && strpos($mn, 'sonuc') !== false;
+            $isCs = strpos($mn, 'çifte') !== false || strpos($mn, 'cifte') !== false;
+            $isKg = strpos($mn, 'karşılıklı') !== false || strpos($mn, 'karsilikli') !== false;
+            $isAu = (strpos($mn, 'alt') !== false && (strpos($mn, 'üst') !== false || strpos($mn, 'ust') !== false))
+                || strpos($mn, 'alt/üst') !== false
+                || (strpos($mn, 'gol') !== false && strpos($mn, 'toplam') === false && count($oca) === 2);
+
+            if ($isIy) {
+                $this->put($out, 'IY1', $nm(['1']) ?? $pos(1));
+                $this->put($out, 'IYX', $nm(['0', 'x']) ?? $pos(2));
+                $this->put($out, 'IY2', $nm(['2']) ?? $pos(3));
+            } elseif ($isCs) {
+                $this->put($out, 'CS1X', $nm(['1-x', '1 veya x', '1 ve x', '1x']) ?? $pos(1));
+                $this->put($out, 'CS12', $nm(['1-2', '1 veya 2', '12']) ?? $pos(2));
+                $this->put($out, 'CSX2', $nm(['x-2', 'x veya 2', 'x2']) ?? $pos(3));
+            } elseif ($isMs) {
+                $this->put($out, 'MS1', $nm(['1']) ?? $pos(1));
+                $this->put($out, 'MSX', $nm(['0', 'x']) ?? $pos(2));
+                $this->put($out, 'MS2', $nm(['2']) ?? $pos(3));
+            } elseif ($isKg) {
+                $this->put($out, 'KGVAR', $nm(['var', 'evet', 'e']) ?? $pos(1));
+                $this->put($out, 'KGYOK', $nm(['yok', 'hayır', 'hayir', 'h']) ?? $pos(2));
+            } elseif ($isAu) {
+                $alt = $nm(['alt', 'a', 'under']) ?? $pos(1);
+                $ust = $nm(['üst', 'ust', 'ü', 'u', 'over']) ?? $pos(2);
+                $line = $this->goalLine($sov, $mn);
+                if ($line !== null) {
+                    $this->put($out, 'ALT' . $line, $alt);
+                    $this->put($out, 'UST' . $line, $ust);
                 }
-            }
-            // Karşılıklı Gol
-            if (strpos($name, 'karşılıklı') !== false || strpos($name, 'karsilikli') !== false) {
-                $this->put($out, 'KGVAR', $take(['var', 'evet', 'e']));
-                $this->put($out, 'KGYOK', $take(['yok', 'hayır', 'hayir', 'h']));
-            }
-            // Çifte Şans
-            if (strpos($name, 'çifte') !== false || strpos($name, 'cifte') !== false) {
-                $this->put($out, 'CS1X', $take(['1-x', '1 veya x', '1 ve x', '1x']));
-                $this->put($out, 'CS12', $take(['1-2', '1 veya 2', '12']));
-                $this->put($out, 'CSX2', $take(['x-2', 'x veya 2', 'x2']));
             }
         }
         return $out;
     }
 
+    /** SOV veya market adından gol çizgisini bulur: 1.5->'15', 2.5->'25', 3.5->'35'. */
+    private function goalLine($sov, string $mn): ?string
+    {
+        $val = (float) str_replace(',', '.', (string) $sov);
+        $cands = [1.5 => '15', 2.5 => '25', 3.5 => '35'];
+        foreach ($cands as $num => $code) {
+            if (abs($val - $num) < 0.01) {
+                return $code;
+            }
+        }
+        if (strpos($mn, '1,5') !== false || strpos($mn, '1.5') !== false) return '15';
+        if (strpos($mn, '2,5') !== false || strpos($mn, '2.5') !== false) return '25';
+        if (strpos($mn, '3,5') !== false || strpos($mn, '3.5') !== false) return '35';
+        return null;
+    }
+
     private function put(array &$arr, string $key, $val): void
     {
-        if ($val !== null && (float) $val >= 1.0) {
-            $arr[$key] = (float) $val;
+        // Oran 1.00 = "oynanmıyor" (placeholder); gerçek oranlar > 1.00
+        if ($val !== null && (float) $val > 1.001) {
+            $arr[$key] = round((float) $val, 2);
         }
     }
 
