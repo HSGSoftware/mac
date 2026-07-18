@@ -7,6 +7,8 @@ use PDOException;
 
 /**
  * PDO singleton veritabanı sarmalayıcı.
+ * Uzun süren isteklerde (ör. AI çağrısı) MySQL boştaki bağlantıyı kapatabilir
+ * ("server has gone away"); bu durumda otomatik yeniden bağlanıp sorgu tekrarlanır.
  */
 class Database
 {
@@ -38,35 +40,78 @@ class Database
         return self::$pdo;
     }
 
+    /** Bağlantıyı sıfırlar (yeniden bağlanma için). */
+    public static function reconnect(): PDO
+    {
+        self::$pdo = null;
+        return self::pdo();
+    }
+
+    private static function isGoneAway(PDOException $e): bool
+    {
+        $code = $e->errorInfo[1] ?? null;
+        if ($code === 2006 || $code === 2013) {
+            return true;
+        }
+        $msg = $e->getMessage();
+        return stripos($msg, 'server has gone away') !== false
+            || stripos($msg, 'Lost connection') !== false
+            || stripos($msg, 'MySQL server') !== false;
+    }
+
+    /**
+     * Sorguyu çalıştırır; "gone away" durumunda bir kez yeniden bağlanıp tekrar dener.
+     */
+    private static function run(callable $fn)
+    {
+        try {
+            return $fn(self::pdo());
+        } catch (PDOException $e) {
+            if (self::isGoneAway($e)) {
+                return $fn(self::reconnect());
+            }
+            throw $e;
+        }
+    }
+
     /** Tek satır getir */
     public static function fetch(string $sql, array $params = []): ?array
     {
-        $stmt = self::pdo()->prepare($sql);
-        $stmt->execute($params);
-        $row = $stmt->fetch();
-        return $row === false ? null : $row;
+        return self::run(function (PDO $pdo) use ($sql, $params) {
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($params);
+            $row = $stmt->fetch();
+            return $row === false ? null : $row;
+        });
     }
 
     /** Çok satır getir */
     public static function fetchAll(string $sql, array $params = []): array
     {
-        $stmt = self::pdo()->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll();
+        return self::run(function (PDO $pdo) use ($sql, $params) {
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($params);
+            return $stmt->fetchAll();
+        });
     }
 
     /** INSERT/UPDATE/DELETE çalıştır, etkilenen satır sayısını döndür */
     public static function execute(string $sql, array $params = []): int
     {
-        $stmt = self::pdo()->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->rowCount();
+        return self::run(function (PDO $pdo) use ($sql, $params) {
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($params);
+            return $stmt->rowCount();
+        });
     }
 
     /** INSERT çalıştır, son eklenen id'yi döndür */
     public static function insert(string $sql, array $params = []): int
     {
-        self::execute($sql, $params);
-        return (int) self::pdo()->lastInsertId();
+        return self::run(function (PDO $pdo) use ($sql, $params) {
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($params);
+            return (int) $pdo->lastInsertId();
+        });
     }
 }

@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../core/constants.dart';
 import '../core/theme.dart';
 import '../models/analysis.dart';
 import '../providers/providers.dart';
 import '../services/api_client.dart';
 import '../widgets/analysis_view.dart';
+import '../widgets/odds_box.dart';
 
 class MatchDetailScreen extends ConsumerWidget {
   final int matchId;
@@ -105,39 +105,70 @@ class _OddsTab extends StatelessWidget {
   final Map<String, double> odds;
   const _OddsTab({required this.odds});
 
+  static const _groups = [
+    ['Maç Sonucu', ['MS1', 'MSX', 'MS2'], ['1', 'X', '2']],
+    ['Çifte Şans', ['CS1X', 'CS12', 'CSX2'], ['1-X', '1-2', 'X-2']],
+    ['2.5 Gol', ['ALT25', 'UST25'], ['Alt', 'Üst']],
+    ['1.5 Gol', ['ALT15', 'UST15'], ['Alt', 'Üst']],
+    ['3.5 Gol', ['ALT35', 'UST35'], ['Alt', 'Üst']],
+    ['Karşılıklı Gol', ['KGVAR', 'KGYOK'], ['Var', 'Yok']],
+  ];
+
   @override
   Widget build(BuildContext context) {
     if (odds.isEmpty) {
-      return const Center(
-          child: Text('Oran bilgisi yok.',
-              style: TextStyle(color: AppColors.textSecondary)));
+      return const _EmptyOdds();
     }
-    final entries = odds.entries.toList();
-    return ListView.separated(
-      padding: const EdgeInsets.all(16),
-      itemCount: entries.length,
-      separatorBuilder: (_, __) => const Divider(color: AppColors.surface2),
-      itemBuilder: (c, i) {
-        final e = entries[i];
-        return Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(marketLabel(e.key)),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                color: AppColors.surface2,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(e.value.toStringAsFixed(2),
-                  style: const TextStyle(
-                      fontWeight: FontWeight.bold, color: AppColors.accent)),
-            ),
+    final sections = <Widget>[];
+    for (final g in _groups) {
+      final keys = g[1] as List<String>;
+      final labels = g[2] as List<String>;
+      if (!keys.any((k) => odds.containsKey(k))) continue;
+      sections.add(Padding(
+        padding: const EdgeInsets.fromLTRB(4, 14, 4, 8),
+        child: Text(g[0] as String,
+            style: const TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 13,
+                color: AppColors.accent)),
+      ));
+      sections.add(Row(
+        children: [
+          for (var i = 0; i < keys.length; i++) ...[
+            Expanded(child: OddsBox(label: labels[i], value: odds[keys[i]])),
+            if (i != keys.length - 1) const SizedBox(width: 8),
           ],
-        );
-      },
+        ],
+      ));
+    }
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Row(
+          children: const [
+            Icon(Icons.bolt, size: 16, color: AppColors.warning),
+            SizedBox(width: 6),
+            Text('Güncel İddaa Oranları',
+                style: TextStyle(fontWeight: FontWeight.bold)),
+          ],
+        ),
+        ...sections,
+      ],
     );
   }
+}
+
+class _EmptyOdds extends StatelessWidget {
+  const _EmptyOdds();
+  @override
+  Widget build(BuildContext context) => const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Text('Bu maç için oran bilgisi bulunamadı.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppColors.textSecondary)),
+        ),
+      );
 }
 
 class _StatsTab extends StatelessWidget {
