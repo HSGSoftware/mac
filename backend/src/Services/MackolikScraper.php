@@ -251,10 +251,35 @@ class MackolikScraper
         return $map;
     }
 
-    /** Bilinen MTID adları (doğrulanmış/yaygın) — nsn bulunamazsa yedek. */
-    private const KNOWN_MTID_NAMES = [
-        1 => 'Maç Sonucu',
+    /**
+     * Doğrulanmış market tanımları (gerçek Nesine oran verisinden matematiksel
+     * tutarlılıkla kimliklendirildi). MTID bazlı: [ad, [seçenek etiketleri]]
+     */
+    private const MTID_DEFS = [
+        1 => ['Maç Sonucu', ['1', 'X', '2']],
+        3 => ['Çifte Şans', ['1-X', '1-2', 'X-2']],
+        7 => ['İlk Yarı Sonucu', ['1', 'X', '2']],
+        9 => ['2. Yarı Sonucu', ['1', 'X', '2']],
+        38 => ['Karşılıklı Gol', ['Var', 'Yok']],
+        43 => ['Toplam Gol Aralığı', ['0-1 Gol', '2-3 Gol', '4-5 Gol', '6+ Gol']],
+        49 => ['Toplam Gol Tek/Çift', ['Tek', 'Çift']],
     ];
+
+    /** MST (market ailesi) bazlı: [ad şablonu ({sov} = gol çizgisi), [etiketler]] */
+    private const MST_DEFS = [
+        101 => ['{sov} Gol Alt/Üst', ['Alt', 'Üst']],
+        7 => ['Maç Sonucu ve {sov} Gol', ['1 ve Alt', 'X ve Alt', '2 ve Alt', '1 ve Üst', 'X ve Üst', '2 ve Üst']],
+        100 => ['Handikaplı Maç Sonucu ({sov})', ['1', 'X', '2']],
+        60 => ['İlk Yarı {sov} Gol Alt/Üst', ['Alt', 'Üst']],
+        603 => ['Ev Sahibi {sov} Gol Alt/Üst', ['Alt', 'Üst']],
+        604 => ['Deplasman {sov} Gol Alt/Üst', ['Alt', 'Üst']],
+    ];
+
+    private function sovText($sov): string
+    {
+        $v = (float) str_replace(',', '.', (string) $sov);
+        return $v > 0 ? number_format($v, 1, ',', '') : '';
+    }
 
     /** Admin panelden yapıştırılabilen elle isim haritası (JSON {mtid: "ad"}). */
     private ?array $customNames = null;
@@ -275,29 +300,25 @@ class MackolikScraper
             return $mn;
         }
         $mtid = isset($m['MTID']) ? (int) $m['MTID'] : 0;
+        $mst = isset($m['MST']) ? (int) $m['MST'] : 0;
         $no = isset($m['NO']) ? (int) $m['NO'] : 0;
         $custom = $this->customNameMap();
         if ($mtid && isset($custom[(string) $mtid])) {
             return (string) $custom[(string) $mtid];
         }
+        if (isset(self::MTID_DEFS[$mtid])) {
+            return self::MTID_DEFS[$mtid][0];
+        }
+        if (isset(self::MST_DEFS[$mst])) {
+            return str_replace('{sov}', $this->sovText($m['SOV'] ?? 0), self::MST_DEFS[$mst][0]);
+        }
         if ($mtid && isset($this->nameMap[(string) $mtid])) {
             return $this->nameMap[(string) $mtid];
-        }
-        if ($no && isset($this->nameMap[(string) $no])) {
-            return $this->nameMap[(string) $no];
-        }
-        if (isset(self::KNOWN_MTID_NAMES[$mtid])) {
-            return self::KNOWN_MTID_NAMES[$mtid];
-        }
-        $mst = isset($m['MST']) ? (int) $m['MST'] : 0;
-        $sov = (float) str_replace(',', '.', (string) ($m['SOV'] ?? 0));
-        if ($mst === 101 && $sov > 0) {
-            return number_format($sov, 1, ',', '') . ' Gol Alt/Üst';
         }
         return 'Market #' . ($no ?: $mtid);
     }
 
-    /** Seçenek etiketi: ON > bilinen kalıp > sıra numarası. */
+    /** Seçenek etiketi: ON > doğrulanmış tanımlar > sıra numarası. */
     private function outcomeLabel(array $m, array $o, int $idx, int $total): string
     {
         $on = trim((string) ($o['ON'] ?? ''));
@@ -306,11 +327,13 @@ class MackolikScraper
         }
         $mtid = isset($m['MTID']) ? (int) $m['MTID'] : 0;
         $mst = isset($m['MST']) ? (int) $m['MST'] : 0;
-        if ($mtid === 1 && $total >= 3) {
-            return ['1', 'X', '2'][$idx] ?? (string) ($idx + 1);
+        // Etiket dizisinde konum: seçeneğin N değeri (1 tabanlı) esas alınır
+        $n = isset($o['N']) && is_numeric((string) $o['N']) ? ((int) $o['N']) - 1 : $idx;
+        if (isset(self::MTID_DEFS[$mtid]) && isset(self::MTID_DEFS[$mtid][1][$n])) {
+            return self::MTID_DEFS[$mtid][1][$n];
         }
-        if ($mst === 101 && $total === 2) {
-            return $idx === 0 ? 'Alt' : 'Üst';
+        if (isset(self::MST_DEFS[$mst]) && isset(self::MST_DEFS[$mst][1][$n])) {
+            return self::MST_DEFS[$mst][1][$n];
         }
         return (string) ($o['N'] ?? ($idx + 1));
     }
@@ -495,6 +518,23 @@ class MackolikScraper
                 $this->put($out, 'MS2', $pos(3));
                 continue;
             }
+            if ($mtid === 3) { // Çifte Şans (1-X / 1-2 / X-2) [doğrulandı]
+                $this->put($out, 'CS1X', $pos(1));
+                $this->put($out, 'CS12', $pos(2));
+                $this->put($out, 'CSX2', $pos(3));
+                continue;
+            }
+            if ($mtid === 7) { // İlk Yarı Sonucu [doğrulandı]
+                $this->put($out, 'IY1', $pos(1));
+                $this->put($out, 'IYX', $pos(2));
+                $this->put($out, 'IY2', $pos(3));
+                continue;
+            }
+            if ($mtid === 38) { // Karşılıklı Gol [doğrulandı]
+                $this->put($out, 'KGVAR', $pos(1));
+                $this->put($out, 'KGYOK', $pos(2));
+                continue;
+            }
             if ($mst === 101 && $cnt === 2) { // Gol Alt/Üst ailesi
                 $ln = $this->goalLine($sov, '');
                 if ($ln !== null) {
@@ -502,24 +542,6 @@ class MackolikScraper
                     $this->put($out, 'UST' . $ln, $pos(2));
                 }
                 continue;
-            }
-            // İsimden yakala (nsn haritası isim verirse)
-            $resolved = mb_strtolower($this->marketName($m), 'UTF-8');
-            $name = $mn !== '' ? $mn : $resolved;
-            if ($name === '') {
-                continue;
-            }
-            if ((strpos($name, 'karşılıklı') !== false || strpos($name, 'karsilikli') !== false) && $cnt === 2) {
-                $this->put($out, 'KGVAR', $pos(1));
-                $this->put($out, 'KGYOK', $pos(2));
-            } elseif ((strpos($name, 'çifte') !== false || strpos($name, 'cifte') !== false) && $cnt === 3) {
-                $this->put($out, 'CS1X', $pos(1));
-                $this->put($out, 'CS12', $pos(2));
-                $this->put($out, 'CSX2', $pos(3));
-            } elseif ((strpos($name, 'ilk yarı sonucu') !== false || strpos($name, 'i̇lk yarı sonucu') !== false) && $cnt === 3) {
-                $this->put($out, 'IY1', $pos(1));
-                $this->put($out, 'IYX', $pos(2));
-                $this->put($out, 'IY2', $pos(3));
             }
         }
         return $out;
