@@ -1,16 +1,19 @@
-class MarketAnalysis {
-  final String market;
-  final String? secenek; // kod dışı marketlerde seçenek adı (ör. "2-3 Gol")
+/// KREDİ sistemi modelleri: her market AYRI analiz edilir ve ayrı kredi tüketir.
+
+/// Bir market analizindeki tek seçenek (AI olasılığı + değer bilgisi).
+class OptionAnalysis {
+  final String kod; // MS1/MSX/MS2 veya scraped seçenek adı
+  final String ad;
   final double? oran;
-  final int? olasilik;
-  final double? impliedOlasilik;
+  final int? olasilik; // AI olasılığı (0-100)
+  final double? impliedOlasilik; // oranın ima ettiği olasılık
   final bool degerVarMi;
   final double? degerFarki;
   final String? gerekce;
 
-  MarketAnalysis({
-    required this.market,
-    this.secenek,
+  OptionAnalysis({
+    required this.kod,
+    required this.ad,
     this.oran,
     this.olasilik,
     this.impliedOlasilik,
@@ -19,9 +22,9 @@ class MarketAnalysis {
     this.gerekce,
   });
 
-  factory MarketAnalysis.fromJson(Map<String, dynamic> j) => MarketAnalysis(
-        market: j['market']?.toString() ?? '',
-        secenek: j['secenek']?.toString(),
+  factory OptionAnalysis.fromJson(Map<String, dynamic> j) => OptionAnalysis(
+        kod: j['kod']?.toString() ?? '',
+        ad: j['ad']?.toString() ?? j['kod']?.toString() ?? '?',
         oran: (j['oran'] as num?)?.toDouble(),
         olasilik: (j['olasilik'] as num?)?.toInt(),
         impliedOlasilik: (j['implied_olasilik'] as num?)?.toDouble(),
@@ -31,79 +34,63 @@ class MarketAnalysis {
       );
 }
 
-/// Modelin gerekçe maddesi ("Model neden böyle düşünüyor?").
-class AnalysisReason {
-  final String tag;
-  final String text;
-  AnalysisReason({required this.tag, required this.text});
-
-  factory AnalysisReason.fromJson(Map<String, dynamic> j) => AnalysisReason(
-        tag: (j['etiket'] ?? j['tag'] ?? '').toString(),
-        text: (j['metin'] ?? j['text'] ?? '').toString(),
-      );
-}
-
-class Analysis {
-  final int id;
-  final int matchId;
-  final String provider;
+/// Tek bir marketin AI analizi (ayrı AI çağrısı + internet araştırması).
+class MarketAiAnalysis {
+  final String marketKey; // 'MS' veya m_<hash>
+  final String marketLabel;
+  final bool isLive; // canlı maçta üretildi
+  final List<OptionAnalysis> secenekler;
+  final String? tavsiye; // önerilen seçeneğin kodu
+  final int? guven; // 1-10
+  final String? ozet;
+  final List<String> kaynaklar; // internet araştırması bulguları
+  final String? provider;
   final String? modelName;
-  final List<MarketAnalysis> markets;
-  final String? generalNote;
-  final String? safestPick;
-  final String? surpriseLevel;
-  final bool isRisky;
-  final int? confidence; // 1-10 güven
-  final List<AnalysisReason> reasons;
   final String? createdAt;
 
-  Analysis({
-    required this.id,
-    required this.matchId,
-    required this.provider,
+  MarketAiAnalysis({
+    required this.marketKey,
+    required this.marketLabel,
+    this.isLive = false,
+    required this.secenekler,
+    this.tavsiye,
+    this.guven,
+    this.ozet,
+    this.kaynaklar = const [],
+    this.provider,
     this.modelName,
-    required this.markets,
-    this.generalNote,
-    this.safestPick,
-    this.surpriseLevel,
-    required this.isRisky,
-    this.confidence,
-    this.reasons = const [],
     this.createdAt,
   });
 
-  /// Belirli bir MS market için model olasılığı (0-100).
-  MarketAnalysis? marketFor(String code) {
-    for (final m in markets) {
-      if (m.market == code) return m;
+  OptionAnalysis? optionFor(String kod) {
+    for (final o in secenekler) {
+      if (o.kod == kod) return o;
     }
     return null;
   }
 
-  factory Analysis.fromJson(Map<String, dynamic> j) {
-    final result = j['result'] as Map<String, dynamic>?;
-    final markets = ((result?['markets'] as List?) ?? [])
-        .map((e) => MarketAnalysis.fromJson(Map<String, dynamic>.from(e)))
-        .toList();
-    final reasons = ((result?['nedenler'] as List?) ?? [])
-        .whereType<Map>()
-        .map((e) => AnalysisReason.fromJson(Map<String, dynamic>.from(e)))
-        .toList();
-    return Analysis(
-      id: j['id'] as int,
-      matchId: j['match_id'] as int? ?? 0,
-      provider: j['provider'] as String? ?? '',
-      modelName: j['model_name'] as String?,
-      markets: markets,
-      generalNote: j['general_note'] as String?,
-      safestPick: j['safest_pick'] as String?,
-      surpriseLevel: j['surprise_level'] as String?,
-      isRisky: j['is_risky'] as bool? ?? false,
-      confidence: (result?['guven'] as num?)?.toInt(),
-      reasons: reasons,
-      createdAt: j['created_at'] as String?,
-    );
-  }
+  /// Önerilen seçenek (tavsiye koduna göre).
+  OptionAnalysis? get tavsiyeSecenek =>
+      tavsiye != null ? optionFor(tavsiye!) : null;
+
+  factory MarketAiAnalysis.fromJson(Map<String, dynamic> j) => MarketAiAnalysis(
+        marketKey: j['market_key']?.toString() ?? '',
+        marketLabel: j['market_label']?.toString() ?? 'Market',
+        isLive: j['is_live'] as bool? ?? false,
+        secenekler: ((j['secenekler'] as List?) ?? [])
+            .whereType<Map>()
+            .map((e) => OptionAnalysis.fromJson(Map<String, dynamic>.from(e)))
+            .toList(),
+        tavsiye: j['tavsiye']?.toString(),
+        guven: (j['guven'] as num?)?.toInt(),
+        ozet: j['ozet'] as String?,
+        kaynaklar: ((j['kaynaklar'] as List?) ?? [])
+            .map((e) => e.toString())
+            .toList(),
+        provider: j['provider'] as String?,
+        modelName: j['model_name'] as String?,
+        createdAt: j['created_at'] as String?,
+      );
 }
 
 /// Bir bahis marketinin tek seçeneği (ör. "Alt" => 1.80).
@@ -122,13 +109,21 @@ class MarketOutcome {
 class BetMarket {
   final String name;
   final double? line; // gol çizgisi (SOV), varsa
-  final String? group; // sunucunun atadığı grup anahtarı (ana/gol/handikap/ozel)
+  final String? key; // sunucunun verdiği analiz anahtarı (m_<hash>)
+  final String? group; // grup anahtarı (ana/gol/handikap/ozel)
   final List<MarketOutcome> outcomes;
-  BetMarket({required this.name, this.line, this.group, required this.outcomes});
+  BetMarket({
+    required this.name,
+    this.line,
+    this.key,
+    this.group,
+    required this.outcomes,
+  });
 
   factory BetMarket.fromJson(Map<String, dynamic> j) => BetMarket(
         name: j['ad']?.toString() ?? 'Market',
         line: (j['sov'] as num?)?.toDouble(),
+        key: j['key']?.toString(),
         group: j['grup']?.toString(),
         outcomes: ((j['secenekler'] as List?) ?? [])
             .whereType<Map>()
@@ -137,18 +132,19 @@ class BetMarket {
       );
 }
 
-/// Bir market grubunun token kilit durumu (sunucudan gelir).
+/// Bir oran grubunun görünürlük durumu (minimum paket sunucudan gelir;
+/// admin panelinden ayarlanır).
 class MarketGroupInfo {
   final String key; // ana / gol / handikap / ozel
   final String name;
-  final int cost; // açmak için gereken token
+  final int minTier; // görebilmek için gereken minimum paket kademesi
   final bool unlocked;
-  final int count; // gruptaki market sayısı
+  final int count;
 
   MarketGroupInfo({
     required this.key,
     required this.name,
-    required this.cost,
+    required this.minTier,
     required this.unlocked,
     required this.count,
   });
@@ -156,24 +152,24 @@ class MarketGroupInfo {
   factory MarketGroupInfo.fromJson(Map<String, dynamic> j) => MarketGroupInfo(
         key: j['key']?.toString() ?? '',
         name: j['name']?.toString() ?? '',
-        cost: (j['cost'] as num?)?.toInt() ?? 0,
+        minTier: (j['min_tier'] as num?)?.toInt() ?? 0,
         unlocked: j['unlocked'] as bool? ?? false,
         count: (j['count'] as num?)?.toInt() ?? 0,
       );
 }
 
-/// Maç detay yanıtı: maç + oranlar + açık marketler + grup kilitleri +
-/// istatistikler + (token ile açılmışsa) analiz.
+/// Maç detay yanıtı: maç + oranlar + görünür marketler + grup durumu +
+/// istatistikler + kullanıcının kredi ile açtığı market analizleri.
 class MatchDetail {
   final Map<String, dynamic> match;
   final Map<String, double> odds;
-  final List<BetMarket> markets; // yalnızca açılmış grupların marketleri
+  final List<BetMarket> markets; // paketin görebildiği grupların marketleri
   final List<MarketGroupInfo> marketGroups;
   final Map<String, dynamic> stats;
-  final Analysis? analysis;
-  final bool analysisExists; // analiz üretilmiş ama kilitli olabilir
-  final Map<String, int> tokenCosts; // analysis / live_analysis / group_<key>
-  final int? tokensLeft; // giriş yapan kullanıcının kalan günlük tokenı
+  final List<MarketAiAnalysis> marketAnalyses; // kullanıcının açtıkları
+  final int creditCostMarket; // bir market analizinin kredi maliyeti
+  final int creditCostLiveMarket; // canlı maçta (yalnız Altın)
+  final int? creditsLeft; // giriş yapan kullanıcının kalan günlük kredisi
 
   MatchDetail({
     required this.match,
@@ -181,15 +177,11 @@ class MatchDetail {
     required this.markets,
     this.marketGroups = const [],
     required this.stats,
-    this.analysis,
-    this.analysisExists = false,
-    this.tokenCosts = const {},
-    this.tokensLeft,
+    this.marketAnalyses = const [],
+    this.creditCostMarket = 1,
+    this.creditCostLiveMarket = 2,
+    this.creditsLeft,
   });
-
-  /// Kullanıcının bu maçta açtığı grup anahtarları.
-  Set<String> get unlockedGroupKeys =>
-      marketGroups.where((g) => g.unlocked).map((g) => g.key).toSet();
 
   factory MatchDetail.fromJson(Map<String, dynamic> j) {
     final odds = <String, double>{};
@@ -214,31 +206,27 @@ class MatchDetail {
         }
       }
     }
-    final costs = <String, int>{};
-    if (j['token_costs'] is Map) {
-      final tc = j['token_costs'] as Map;
-      if (tc['analysis'] is num) costs['analysis'] = (tc['analysis'] as num).toInt();
-      if (tc['live_analysis'] is num) {
-        costs['live_analysis'] = (tc['live_analysis'] as num).toInt();
-      }
-      if (tc['groups'] is Map) {
-        (tc['groups'] as Map).forEach((k, v) {
-          if (v is num) costs['group_$k'] = v.toInt();
-        });
+    final analyses = <MarketAiAnalysis>[];
+    if (j['market_analyses'] is List) {
+      for (final a in (j['market_analyses'] as List)) {
+        if (a is Map) {
+          analyses.add(MarketAiAnalysis.fromJson(Map<String, dynamic>.from(a)));
+        }
       }
     }
+    final costs = j['credit_costs'] is Map
+        ? Map<String, dynamic>.from(j['credit_costs'])
+        : <String, dynamic>{};
     return MatchDetail(
       match: j['match'] is Map ? Map<String, dynamic>.from(j['match']) : {},
       odds: odds,
       markets: markets,
       marketGroups: groups,
       stats: j['stats'] is Map ? Map<String, dynamic>.from(j['stats']) : {},
-      analysis: j['analysis'] is Map
-          ? Analysis.fromJson(Map<String, dynamic>.from(j['analysis']))
-          : null,
-      analysisExists: j['analysis_exists'] as bool? ?? j['analysis'] is Map,
-      tokenCosts: costs,
-      tokensLeft: (j['tokens_left'] as num?)?.toInt(),
+      marketAnalyses: analyses,
+      creditCostMarket: (costs['market'] as num?)?.toInt() ?? 1,
+      creditCostLiveMarket: (costs['live_market'] as num?)?.toInt() ?? 2,
+      creditsLeft: (j['credits_left'] as num?)?.toInt(),
     );
   }
 }

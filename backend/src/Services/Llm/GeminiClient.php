@@ -18,18 +18,23 @@ class GeminiClient implements LlmClientInterface
         $this->model = $model;
     }
 
-    public function complete(string $systemPrompt, string $userPrompt): array
+    public function complete(string $systemPrompt, string $userPrompt, array $options = []): array
     {
         if ($this->apiKey === '') {
             throw new \RuntimeException('Gemini API anahtarı tanımlı değil.');
         }
+        $webSearch = !empty($options['web_search']);
         $url = "https://generativelanguage.googleapis.com/v1beta/models/{$this->model}:generateContent?key=" . urlencode($this->apiKey);
         $generationConfig = [
             'temperature' => 0.4,
-            'responseMimeType' => 'application/json',
             // Tüm marketlerin analizi uzun JSON üretir; kesilmesin
             'maxOutputTokens' => 8192,
         ];
+        // Google Search grounding, JSON yanıt moduyla birlikte kullanılamaz;
+        // web araması açıkken düz metin ister, JSON'u yanıttan ayıklarız.
+        if (!$webSearch) {
+            $generationConfig['responseMimeType'] = 'application/json';
+        }
         // Gemini 2.5 modellerinde "düşünme" varsayılan açık ve yanıtı ciddi yavaşlatır;
         // yapılandırılmış analiz için gereksiz — kapat. (Eski modeller bu alanı kabul etmez.)
         if (str_contains($this->model, '2.5')) {
@@ -40,12 +45,20 @@ class GeminiClient implements LlmClientInterface
             'contents' => [['role' => 'user', 'parts' => [['text' => $userPrompt]]]],
             'generationConfig' => $generationConfig,
         ];
+        if ($webSearch) {
+            // İnternet araştırması: Google Search grounding aracı
+            $payload['tools'] = [['google_search' => new \stdClass()]];
+        }
         $res = HttpClient::postJson($url, $payload, [], 90);
         if ($res['status'] !== 200) {
             throw new \RuntimeException('Gemini hatası (HTTP ' . $res['status'] . '): ' . mb_substr($res['body'], 0, 300));
         }
         $data = json_decode($res['body'], true);
-        $text = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
+        // Grounding (web araması) açıkken yanıt birden çok part'a bölünebilir
+        $text = '';
+        foreach (($data['candidates'][0]['content']['parts'] ?? []) as $part) {
+            $text .= $part['text'] ?? '';
+        }
         if ($text === '') {
             throw new \RuntimeException('Gemini boş yanıt döndürdü.');
         }

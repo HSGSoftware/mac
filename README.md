@@ -30,10 +30,13 @@ Admin Panel  ──────────►  PHP (public_html/admin)      ▲
 
 - **Backend:** Framework'süz saf PHP (PSR-4 autoload, harici bağımlılık yok). PDO/MySQL.
 - **Analiz:** İstek üzerine üretilir ve DB'de önbelleğe alınır — aynı maç için tek AI çağrısı.
-- **Üyelik & Token:** 4 kademe (Ücretsiz / Bronz / Gümüş / Altın). Her paketin
-  **günlük token hakkı** vardır; tokenlar her gün sıfırlanır, ertesi güne devretmez.
-  Market grupları ve AI analizleri token harcanarak açılır (maç başına bir kez).
-  Günün AI Kuponu: Gümüş + Altın. Canlı maç AI tahminleri: yalnız Altın (token ile).
+- **Üyelik & Kredi:** 4 kademe (Ücretsiz / Bronz / Gümüş / Altın). Her paketin
+  **günlük AI analiz kredisi** vardır (vars. 1/20/50/120); krediler her gün sıfırlanır,
+  ertesi güne devretmez. **Her market AYRI bir AI çağrısıyla analiz edilir ve ayrı
+  kredi tüketir** (internet araştırması dahil — Gemini web grounding). Aynı maçın aynı
+  marketini tekrar görüntülemek ücretsizdir. Oran gruplarının hangi pakete açık olduğu,
+  kredi miktarları ve maliyetler admin panelinden ayarlanır. Günün AI Kuponu: Gümüş +
+  Altın. Canlı maçlarda anlık AI analizleri: yalnız Altın (daha yüksek kredi).
 
 ## Dizin yapısı
 
@@ -132,10 +135,8 @@ API adresi `API_BASE_URL` environment variable'ı ile derleme zamanında enjekte
 | GET | `/leagues` | Ligler |
 | GET | `/matches?date=YYYY-MM-DD` | Bülten (lige gruplu, listede model `signal` alanı) |
 | GET | `/matches/live` | Canlı maçlar (canlı oran + skor) |
-| GET | `/matches/{id}` | Maç detayı (oran + grup kilitleri `market_groups` + açık marketler + istatistik + açılmışsa analiz) |
-| POST | `/matches/{id}/unlock-group` | Market grubunu token ile aç (`{group: ana\|gol\|handikap\|ozel}`) |
-| POST | `/matches/{id}/analyze` | AI analizi (token ile açılır; canlı maçta yalnız Altın) |
-| GET | `/matches/{id}/analysis` | Mevcut analiz (yalnız token ile açan kullanıcıya) |
+| GET | `/matches/{id}` | Maç detayı (oran + grup görünürlüğü `market_groups` + görünür marketler + istatistik + kullanıcının açtığı `market_analyses`) |
+| POST | `/matches/{id}/analyze-market` | TEK marketi AI ile analiz et (`{market_key}`, kredi tüketir; canlı maçta yalnız Altın) |
 | GET | `/me/analyses` | "Analizlerim" — kullanıcının incelediği maçlar + isabet |
 | GET | `/coupon/daily` | "Günün AI Kuponu" — Gümüş + Altın |
 | GET/POST/DELETE | `/favorites` | Favoriler |

@@ -15,14 +15,13 @@ class AccountScreen extends ConsumerWidget {
 
   /// (özellik, gereken kademe)
   static const _perks = <(String, int)>[
-    ('Günlük token hakkı (her gün yenilenir)', 0),
-    ('Market gruplarını token ile açma', 0),
-    ('AI maç analizleri (token ile)', 0),
-    ('Günde 100 token', 1),
-    ('Günde 250 token', 2),
+    ('Günlük AI analiz kredisi (her gün yenilenir)', 0),
+    ('Her market için ayrı AI analizi', 0),
+    ('Günde 20 kredi + Gol marketleri oranları', 1),
+    ('Günde 50 kredi + Handikap & Kombine oranları', 2),
     ('Günün AI Kuponu', 2),
-    ('Günde 600 token', 3),
-    ('Canlı maçlarda AI tahminleri', 3),
+    ('Günde 120 kredi + tüm oran grupları', 3),
+    ('Canlı maçlarda anlık AI analizleri', 3),
   ];
 
   @override
@@ -81,7 +80,7 @@ class AccountScreen extends ConsumerWidget {
                 ],
               ),
               const SizedBox(height: 16),
-              _tokenCard(user?.tokensLeft ?? 0, user?.dailyTokens ?? 0),
+              _creditCard(user?.creditsLeft ?? 0, user?.dailyCredits ?? 0),
               const SizedBox(height: 12),
               premium
                   ? _premiumCard(context, tier, user?.premiumUntil)
@@ -231,8 +230,8 @@ class AccountScreen extends ConsumerWidget {
     );
   }
 
-  /// Günlük token bakiyesi kartı (her gün sıfırlanır, devretmez).
-  Widget _tokenCard(int left, int daily) {
+  /// Günlük AI analiz kredisi kartı (her gün sıfırlanır, devretmez).
+  Widget _creditCard(int left, int daily) {
     final ratio = daily > 0 ? (left / daily).clamp(0.0, 1.0) : 0.0;
     return Container(
       padding: const EdgeInsets.all(14),
@@ -246,10 +245,10 @@ class AccountScreen extends ConsumerWidget {
         children: [
           Row(
             children: [
-              const Icon(Icons.token_outlined, size: 16, color: AppColors.primary),
+              const Icon(Icons.bolt, size: 16, color: AppColors.primary),
               const SizedBox(width: 7),
               Expanded(
-                child: Text('GÜNLÜK TOKEN',
+                child: Text('GÜNLÜK AI ANALİZ KREDİSİ',
                     style: AppText.sans(
                         size: 10.5,
                         weight: FontWeight.w800,
@@ -272,8 +271,8 @@ class AccountScreen extends ConsumerWidget {
           ),
           const SizedBox(height: 7),
           Text(
-              'Token hakkınız her gün yenilenir; kullanılmayan tokenlar ertesi güne devretmez. '
-              'Market grupları ve AI analizleri token ile açılır.',
+              'Krediniz her gün yenilenir; kullanılmayan krediler ertesi güne devretmez. '
+              'Her market analizi ayrı kredi tüketir.',
               style: AppText.sans(
                   size: 10.5,
                   weight: FontWeight.w500,
@@ -303,8 +302,8 @@ class AccountScreen extends ConsumerWidget {
                   size: 14.5, weight: FontWeight.w800, color: const Color(0xFFE7CE8B))),
           const SizedBox(height: 5),
           Text(
-              'Günlük tokenınız bir maçın bir market grubunu açmaya yeter. '
-              'Paketlerle günlük token hakkınız artar.',
+              'Günlük krediniz bir maçın bir marketini analiz ettirmeye yeter. '
+              'Paketlerle günlük krediniz ve görebildiğiniz oran grupları artar.',
               style: AppText.sans(
                   size: 11.5, weight: FontWeight.w500, color: const Color(0xFFC9B279))),
           const SizedBox(height: 12),

@@ -15,8 +15,8 @@ CREATE TABLE IF NOT EXISTS users (
     premium_until      DATETIME DEFAULT NULL,
     daily_analysis_count INT UNSIGNED NOT NULL DEFAULT 0,
     counter_date       DATE DEFAULT NULL,
-    tokens_used        INT UNSIGNED NOT NULL DEFAULT 0,  -- bugün harcanan token
-    tokens_date        DATE DEFAULT NULL,                -- token sayacının günü (gün değişince sıfırlanır)
+    credits_used       INT UNSIGNED NOT NULL DEFAULT 0,  -- bugün harcanan kredi
+    credits_date       DATE DEFAULT NULL,                -- kredi sayacının günü (gün değişince sıfırlanır)
     fcm_token          VARCHAR(255) DEFAULT NULL,
     is_banned          TINYINT(1) NOT NULL DEFAULT 0,
     created_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -168,17 +168,41 @@ CREATE TABLE IF NOT EXISTS user_favorites (
     CONSTRAINT fk_fav_match FOREIGN KEY (match_id) REFERENCES matches(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- ---------- Token ile açılan içerikler ----------
--- Market grubu / AI analizi token harcanarak maç başına bir kez açılır;
--- tekrar görüntüleme ücretsizdir.
+-- ---------- Market başına AI analizleri (kredi sistemi) ----------
+-- Her market ayrı bir AI çağrısıyla analiz edilir; maç+market başına tek satır.
+-- Canlı maçlarda live_analysis_ttl süresi dolunca tazelenir.
+CREATE TABLE IF NOT EXISTS market_analyses (
+    id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    match_id      BIGINT UNSIGNED NOT NULL,
+    market_key    VARCHAR(64) NOT NULL,     -- 'MS' veya scraped market anahtarı (m_<hash>)
+    market_label  VARCHAR(160) NOT NULL,
+    is_live       TINYINT(1) NOT NULL DEFAULT 0,
+    status        ENUM('pending','done','failed') NOT NULL DEFAULT 'pending',
+    provider      VARCHAR(40) DEFAULT NULL,
+    model_name    VARCHAR(80) DEFAULT NULL,
+    result        LONGTEXT DEFAULT NULL,    -- JSON: secenekler[], tavsiye, guven, ozet, kaynaklar
+    error_message VARCHAR(500) DEFAULT NULL,
+    token_usage   INT UNSIGNED DEFAULT NULL,
+    created_by    BIGINT UNSIGNED DEFAULT NULL,
+    created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_ma (match_id, market_key),
+    KEY idx_ma_match (match_id),
+    CONSTRAINT fk_ma_match FOREIGN KEY (match_id) REFERENCES matches(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------- Kredi ile açılan market analizleri ----------
+-- Aynı maçın aynı marketini tekrar görüntülemek ücretsizdir; canlıda
+-- tazelik süresi dolunca yeni analiz yeni kredi ister.
 CREATE TABLE IF NOT EXISTS user_unlocks (
-    id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-    user_id      BIGINT UNSIGNED NOT NULL,
-    match_id     BIGINT UNSIGNED NOT NULL,
-    item_type    VARCHAR(20) NOT NULL,             -- market_group / analysis
-    item_key     VARCHAR(30) NOT NULL DEFAULT '',  -- grup anahtarı (ana/gol/handikap/ozel)
-    tokens_spent INT UNSIGNED NOT NULL DEFAULT 0,
-    created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    user_id       BIGINT UNSIGNED NOT NULL,
+    match_id      BIGINT UNSIGNED NOT NULL,
+    item_type     VARCHAR(20) NOT NULL,             -- 'market'
+    item_key      VARCHAR(64) NOT NULL DEFAULT '',  -- market anahtarı
+    credits_spent INT UNSIGNED NOT NULL DEFAULT 0,
+    created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     UNIQUE KEY uq_unlock (user_id, match_id, item_type, item_key),
     KEY idx_unlock_user_match (user_id, match_id),
@@ -234,16 +258,18 @@ INSERT INTO settings (skey, svalue) VALUES
     ('free_daily_limit', '3'),
     ('bronz_daily_limit', '15'),
     ('gumus_daily_limit', '40'),
-    ('free_daily_tokens', '10'),
-    ('bronz_daily_tokens', '100'),
-    ('gumus_daily_tokens', '250'),
-    ('altin_daily_tokens', '600'),
-    ('token_cost_group_ana', '10'),
-    ('token_cost_group_gol', '15'),
-    ('token_cost_group_handikap', '20'),
-    ('token_cost_group_ozel', '25'),
-    ('token_cost_analysis', '25'),
-    ('token_cost_live_analysis', '40'),
+    ('free_daily_credits', '1'),
+    ('bronz_daily_credits', '20'),
+    ('gumus_daily_credits', '50'),
+    ('altin_daily_credits', '120'),
+    ('credit_cost_market', '1'),
+    ('credit_cost_live_market', '2'),
+    ('live_analysis_ttl', '180'),
+    ('group_min_tier_ana', '0'),
+    ('group_min_tier_gol', '1'),
+    ('group_min_tier_handikap', '2'),
+    ('group_min_tier_ozel', '3'),
+    ('ai_web_search', '1'),
     ('scraper_base_url', 'https://www.mackolik.com'),
     ('scraper_user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36'),
     ('announcement', '')

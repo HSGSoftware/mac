@@ -60,12 +60,8 @@ $router->get('/matches', [$matches, 'index']);
 $router->get('/matches/live', [$matches, 'live']);
 $router->get('/matches/{id}', [$matches, 'show']);
 
-// ---- Analiz ----
-$router->post('/matches/{id}/analyze', [$analysis, 'analyze']);
-$router->get('/matches/{id}/analysis', [$analysis, 'show']);
-
-// ---- Token: market grubu açma ----
-$router->post('/matches/{id}/unlock-group', [$matches, 'unlockGroup']);
+// ---- Analiz (kredi sistemi: her market ayrı analiz edilir) ----
+$router->post('/matches/{id}/analyze-market', [$analysis, 'analyzeMarket']);
 
 // ---- Favoriler ----
 $router->get('/favorites', [$matches, 'favorites']);

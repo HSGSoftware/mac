@@ -2,6 +2,7 @@
 
 namespace MacRadar\Services;
 
+use MacRadar\Core\Credits;
 use MacRadar\Core\Database;
 use MacRadar\Core\Settings;
 use MacRadar\Services\Llm\LlmFactory;
@@ -102,6 +103,307 @@ class AnalysisEngine
             );
             throw $e;
         }
+    }
+
+    // ================== MARKET BAŞINA ANALİZ (kredi sistemi) ==================
+
+    /**
+     * TEK BİR marketi ayrı bir AI çağrısıyla analiz eder ve market_analyses
+     * tablosuna kaydeder (maç+market başına tek satır; canlıda tazelenir).
+     * İnternet araştırması (ai_web_search ayarı) açıksa Gemini web grounding
+     * kullanılır.
+     *
+     * @param string $marketKey 'MS' (Maç Sonucu) veya scraped market anahtarı (m_<hash>)
+     * @return array market_analyses DB satırı
+     */
+    public function analyzeMarket(int $matchId, string $marketKey, ?int $userId = null): array
+    {
+        $match = Database::fetch(
+            "SELECT m.*, ht.name AS home_name, at.name AS away_name, l.name AS league_name
+             FROM matches m
+             LEFT JOIN teams ht ON ht.id = m.home_team_id
+             LEFT JOIN teams at ON at.id = m.away_team_id
+             LEFT JOIN leagues l ON l.id = m.league_id
+             WHERE m.id = ?",
+            [$matchId]
+        );
+        if (!$match) {
+            throw new \RuntimeException('Maç bulunamadı.');
+        }
+        $isLive = ($match['status'] ?? '') === 'live';
+
+        // Önbellek: bitmiş analiz varsa ve tazeyse (canlıda TTL) yeniden üretme
+        $existing = Database::fetch(
+            "SELECT * FROM market_analyses WHERE match_id = ? AND market_key = ?",
+            [$matchId, $marketKey]
+        );
+        if ($existing && $existing['status'] === 'done' && $this->isMarketAnalysisFresh($existing, $isLive)) {
+            return $existing;
+        }
+
+        // İstatistik eksikse anlık çekmeyi dene
+        $statsCount = (int) (Database::fetch('SELECT COUNT(*) c FROM match_stats WHERE match_id = ?', [$matchId])['c'] ?? 0);
+        if ($statsCount === 0) {
+            try {
+                (new MackolikScraper())->fetchMatchStats($matchId);
+            } catch (\Throwable $e) {
+                // istatistik alınamazsa mevcut oran/verilerle devam
+            }
+        }
+
+        $def = $this->resolveMarket($matchId, $marketKey);
+        if (!$def) {
+            throw new \RuntimeException('Bu maçta böyle bir market bulunamadı.');
+        }
+        $stats = $this->stats($matchId);
+        $provider = LlmFactory::providerName();
+
+        // pending satırı oluştur/tazele
+        Database::execute(
+            "INSERT INTO market_analyses (match_id, market_key, market_label, is_live, status, provider, created_by, created_at)
+             VALUES (?, ?, ?, ?, 'pending', ?, ?, NOW())
+             ON DUPLICATE KEY UPDATE status='pending', market_label=VALUES(market_label),
+                 is_live=VALUES(is_live), provider=VALUES(provider),
+                 created_by=VALUES(created_by), error_message=NULL, created_at=NOW()",
+            [$matchId, $marketKey, $def['label'], $isLive ? 1 : 0, $provider, $userId]
+        );
+        $rowId = (int) (Database::fetch(
+            'SELECT id FROM market_analyses WHERE match_id = ? AND market_key = ?',
+            [$matchId, $marketKey]
+        )['id'] ?? 0);
+
+        try {
+            $client = LlmFactory::make();
+            $web = Credits::webSearchEnabled();
+            $systemPrompt = $this->marketSystemPrompt($web);
+            $userPrompt = $this->buildMarketPrompt($match, $def, $stats, $web);
+
+            $result = $client->complete($systemPrompt, $userPrompt, ['web_search' => $web]);
+            $parsed = $this->parseMarketResult($result['text']);
+            if ($parsed === null) {
+                $result = $client->complete($systemPrompt, $userPrompt . "\n\nSADECE geçerli JSON döndür, açıklama ekleme.", ['web_search' => $web]);
+                $parsed = $this->parseMarketResult($result['text']);
+            }
+            if ($parsed === null) {
+                throw new \RuntimeException('AI yanıtı geçerli JSON değil.');
+            }
+            $parsed = $this->annotateMarketResult($parsed, $def);
+
+            Database::execute(
+                "UPDATE market_analyses SET status='done', model_name=?, result=?, token_usage=?, created_at=NOW() WHERE id=?",
+                [
+                    $result['model'],
+                    json_encode($parsed, JSON_UNESCAPED_UNICODE),
+                    $result['tokens'],
+                    $rowId,
+                ]
+            );
+            return Database::fetch('SELECT * FROM market_analyses WHERE id = ?', [$rowId]);
+        } catch (\Throwable $e) {
+            Database::execute(
+                "UPDATE market_analyses SET status='failed', error_message=? WHERE id=?",
+                [mb_substr($e->getMessage(), 0, 500), $rowId]
+            );
+            throw $e;
+        }
+    }
+
+    /** Analiz taze mi? Maç öncesi kalıcı; canlıda live_analysis_ttl saniye geçerli. */
+    public function isMarketAnalysisFresh(array $row, bool $matchIsLive): bool
+    {
+        if (!$matchIsLive) {
+            return true;
+        }
+        $age = time() - strtotime((string) $row['created_at']);
+        return $age <= Credits::liveTtl();
+    }
+
+    /**
+     * Market anahtarını maçın gerçek marketine çözer.
+     * 'MS' → odds tablosundaki MS1/MSX/MS2; diğerleri scraped market listesinden.
+     * @return array{key:string,label:string,group:string,options:array}|null
+     */
+    public function resolveMarket(int $matchId, string $marketKey): ?array
+    {
+        if ($marketKey === 'MS') {
+            $odds = $this->latestOdds($matchId);
+            $names = ['MS1' => 'Ev sahibi kazanır (1)', 'MSX' => 'Beraberlik (X)', 'MS2' => 'Deplasman kazanır (2)'];
+            $opts = [];
+            foreach ($names as $kod => $ad) {
+                if (isset($odds[$kod])) {
+                    $opts[] = ['kod' => $kod, 'ad' => $ad, 'oran' => (float) $odds[$kod]];
+                }
+            }
+            if (!$opts) {
+                return null;
+            }
+            return ['key' => 'MS', 'label' => 'Maç Sonucu', 'group' => 'ana', 'options' => $opts];
+        }
+
+        $stats = $this->stats($matchId);
+        foreach (($stats['markets'] ?? []) as $mk) {
+            if (!is_array($mk)) {
+                continue;
+            }
+            $name = (string) ($mk['ad'] ?? '');
+            $key = Credits::marketKeyFor($name, $mk['sov'] ?? null);
+            if ($key !== $marketKey) {
+                continue;
+            }
+            $opts = [];
+            foreach (($mk['secenekler'] ?? []) as $o) {
+                $ad = (string) ($o['ad'] ?? '?');
+                $opts[] = [
+                    'kod' => $ad,
+                    'ad' => $ad,
+                    'oran' => isset($o['oran']) ? (float) $o['oran'] : null,
+                ];
+            }
+            if (!$opts) {
+                return null;
+            }
+            $sov = $mk['sov'] ?? null;
+            $label = $name . ($sov !== null && $sov !== '' ? " ($sov)" : '');
+            return [
+                'key' => $key,
+                'label' => $label,
+                'group' => Credits::groupKeyForMarketName($name),
+                'options' => $opts,
+            ];
+        }
+        return null;
+    }
+
+    private function marketSystemPrompt(bool $webSearch): string
+    {
+        $research = $webSearch
+            ? "İNTERNET ARAŞTIRMASI: Elindeki arama aracıyla bu maç ve iki takım hakkında GÜNCEL bilgileri araştır: "
+              . "sakat ve cezalı oyuncular, muhtemel 11'ler, teknik direktör durumu, son haberler, motivasyon, hava durumu. "
+              . "Bulduğun somut bilgileri analizde kullan ve 'kaynaklar' alanında 1-3 kısa madde olarak özetle. "
+              . "Doğrulayamadığın bilgiyi uydurma.\n\n"
+            : "Güncel sakatlık/kadro bilgisinden emin değilsen tahmin uydurma; genel kadro gücü üzerinden değerlendir.\n\n";
+
+        return "Sen deneyimli, profesyonel bir futbol bahis analistisin. Görevin, sana verilen maç için "
+            . "TEK BİR bahis marketini derinlemesine analiz etmek: her seçeneğe gerçekçi olasılık ve kısa, "
+            . "veriye dayalı gerekçe vermek, en mantıklı seçeneği önermek.\n\n"
+            . $research
+            . "Analizinde şunları hesaba kat: takım formları, H2H geçmişi, puan durumu, kadro/sakatlık durumu, "
+            . "maçın bağlamı (derbi, küme/şampiyonluk baskısı, fikstür yoğunluğu), canlıysa güncel skor/dakika "
+            . "ve oranların ima ettiği olasılıklarla kendi olasılıkların arasındaki fark (değer fırsatı).\n\n"
+            . "Yanıtını YALNIZCA şu JSON şemasında ver:\n"
+            . '{"secenekler":[{"kod":"MS1","olasilik":45,"gerekce":"tek cümlelik somut gerekçe"}],'
+            . '"tavsiye":"MS1","guven":7,"ozet":"marketin 2-3 cümlelik değerlendirmesi","kaynaklar":["..."]}'
+            . "\n\nKURALLAR:\n"
+            . "- 'kod' alanına sana verilen seçenek kodunu AYNEN yaz; listede olmayan seçenek uydurma.\n"
+            . "- Marketin TÜM seçeneklerine olasılık ver; olasılıkların toplamı ~100 olsun ('olasilik' 0-100 tam sayı).\n"
+            . "- 'tavsiye': en mantıklı bulduğun seçeneğin kodu.\n"
+            . "- 'guven': analizine güvenin, 1-10 tam sayı.\n"
+            . "- 'gerekce' tek cümle, somut ve veriye dayalı olsun ('form iyi' gibi boş laf değil).\n"
+            . "- 'kaynaklar': internetten bulduğun önemli güncel bilgiler (yoksa boş dizi).\n"
+            . "- Abartma, veriye sadık kal; belirsizliği dürüstçe belirt.";
+    }
+
+    private function buildMarketPrompt(array $match, array $def, array $stats, bool $webSearch): string
+    {
+        $custom = Settings::get('analysis_prompt');
+        $header = $custom ?: 'Aşağıdaki maçın belirtilen marketini analiz et:';
+
+        $lines = [$header, ''];
+        $lines[] = "Maç: {$match['home_name']} vs {$match['away_name']}";
+        $lines[] = 'Lig: ' . ($match['league_name'] ?? '-');
+        $lines[] = 'Tarih: ' . ($match['start_time'] ?? '-');
+        if (($match['status'] ?? '') === 'live') {
+            $skor = ($match['ms_home'] !== null && $match['ms_away'] !== null)
+                ? $match['ms_home'] . '-' . $match['ms_away'] : 'bilinmiyor';
+            $lines[] = 'DURUM: Maç ŞU AN CANLI OYNANIYOR. Güncel skor: ' . $skor
+                . ($match['minute'] ? ', dakika: ' . $match['minute'] : '') . '.';
+            $lines[] = 'Analizini mevcut skoru ve kalan süreyi dikkate alarak yap (canlı bahis analizi).';
+        }
+        $lines[] = '';
+        $lines[] = 'ANALİZ EDİLECEK MARKET: ' . $def['label'];
+        $lines[] = 'Seçenekler (kod → oran):';
+        foreach ($def['options'] as $o) {
+            $lines[] = '  - ' . $o['kod'] . ' (' . $o['ad'] . '): ' . ($o['oran'] ?? '?');
+        }
+        if (!empty($stats['form_home'])) {
+            $lines[] = '';
+            $lines[] = 'Ev sahibi son maçlar: ' . json_encode($stats['form_home'], JSON_UNESCAPED_UNICODE);
+        }
+        if (!empty($stats['form_away'])) {
+            $lines[] = 'Deplasman son maçlar: ' . json_encode($stats['form_away'], JSON_UNESCAPED_UNICODE);
+        }
+        if (!empty($stats['h2h'])) {
+            $lines[] = 'Aralarındaki maçlar (H2H): ' . json_encode($stats['h2h'], JSON_UNESCAPED_UNICODE);
+        }
+        if (!empty($stats['standings'])) {
+            $lines[] = 'Puan durumu: ' . json_encode($stats['standings'], JSON_UNESCAPED_UNICODE);
+        }
+        if (!empty($stats['injuries'])) {
+            $lines[] = 'Sakat/cezalı oyuncular (veri): ' . json_encode($stats['injuries'], JSON_UNESCAPED_UNICODE);
+        }
+        if (!empty($stats['live'])) {
+            $lines[] = 'Canlı istatistikler: ' . json_encode($stats['live'], JSON_UNESCAPED_UNICODE);
+        }
+        $lines[] = '';
+        $lines[] = 'YALNIZCA bu marketi analiz et. '
+            . ($webSearch ? 'Önce internette bu maçla ilgili güncel bilgileri araştır, sonra ' : '')
+            . 'her seçenek için olasılık + gerekçe içeren JSON döndür.';
+        return implode("\n", $lines);
+    }
+
+    /** Tek market yanıtını çözümle: {"secenekler":[...]} bekler. */
+    private function parseMarketResult(string $text): ?array
+    {
+        $text = trim($text);
+        $text = preg_replace('/^```(?:json)?\s*/i', '', $text);
+        $text = preg_replace('/\s*```$/', '', $text);
+        $data = json_decode($text, true);
+        if (is_array($data) && isset($data['secenekler'])) {
+            return $data;
+        }
+        // Metin içinde ilk { ... } bloğunu yakala (web aramalı yanıtlar düz metin gelebilir)
+        if (preg_match('/\{.*\}/s', $text, $m)) {
+            $data = json_decode($m[0], true);
+            if (is_array($data) && isset($data['secenekler'])) {
+                return $data;
+            }
+        }
+        return null;
+    }
+
+    /** Seçeneklere oran/ad ekle ve değer bahsi (value bet) hesapla. */
+    private function annotateMarketResult(array $parsed, array $def): array
+    {
+        $byKod = [];
+        foreach ($def['options'] as $o) {
+            $byKod[$o['kod']] = $o;
+        }
+        $out = [];
+        foreach (($parsed['secenekler'] ?? []) as $s) {
+            if (!is_array($s) || !isset($s['kod'])) {
+                continue;
+            }
+            $kod = (string) $s['kod'];
+            $defOpt = $byKod[$kod] ?? null;
+            if (!$defOpt) {
+                continue; // uydurulan seçenekleri at
+            }
+            $oran = $defOpt['oran'];
+            $s['ad'] = $defOpt['ad'];
+            $s['oran'] = $oran;
+            $aiProb = isset($s['olasilik']) ? (float) $s['olasilik'] : null;
+            if ($oran && $oran > 0 && $aiProb !== null) {
+                $implied = round(100 / $oran, 1);
+                $s['implied_olasilik'] = $implied;
+                $s['deger_var_mi'] = $aiProb > $implied + 3;
+                $s['deger_farki'] = round($aiProb - $implied, 1);
+            }
+            $out[] = $s;
+        }
+        $parsed['secenekler'] = $out;
+        $parsed['market_key'] = $def['key'];
+        $parsed['market_label'] = $def['label'];
+        return $parsed;
     }
 
     private function annotateValueBets(array $markets, array $odds): array

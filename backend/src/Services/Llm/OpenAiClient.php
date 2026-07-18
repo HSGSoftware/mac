@@ -22,7 +22,9 @@ class OpenAiClient implements LlmClientInterface
         $this->model = $model;
     }
 
-    public function complete(string $systemPrompt, string $userPrompt): array
+    // Not: web_search seçeneği Chat Completions formatında desteklenmez;
+    // internet araştırması için Gemini sağlayıcısını kullanın.
+    public function complete(string $systemPrompt, string $userPrompt, array $options = []): array
     {
         $url = $this->baseUrl . '/chat/completions';
         $payload = [
