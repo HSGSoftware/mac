@@ -130,14 +130,34 @@ class MackolikScraper
         if ($first === null) {
             $first = $events[0] ?? null;
         }
+        // Market özeti: MTID -> (oran sayısı, SOV, ilk oranlar). MTID eşlemesi için.
+        $summary = [];
+        $allMarkets = array_merge(
+            (is_array($first) && !empty($first['MA'])) ? $first['MA'] : [],
+            (is_array($first) && !empty($first['MSA'])) ? $first['MSA'] : []
+        );
+        foreach ($allMarkets as $mk) {
+            if (!is_array($mk)) {
+                continue;
+            }
+            $summary[] = [
+                'MTID' => $mk['MTID'] ?? null,
+                'MST' => $mk['MST'] ?? null,
+                'SOV' => $mk['SOV'] ?? null,
+                'MN' => $mk['MN'] ?? null,
+                'oc' => count($mk['OCA'] ?? []),
+                'odds' => array_map(fn($o) => is_array($o) ? ($o['O'] ?? null) : null, array_slice($mk['OCA'] ?? [], 0, 4)),
+            ];
+        }
         return [
             'url' => $bultenUrl,
             'top_keys' => array_keys($data),
+            'nsn' => $data['nsn'] ?? null,
             'event_count' => count($events),
-            'first_event_keys' => is_array($first) ? array_keys($first) : [],
+            'first_event_teams' => is_array($first) ? (($first['HN'] ?? '') . ' - ' . ($first['AN'] ?? '')) : '',
             'first_event_ma_count' => is_array($first) ? count($first['MA'] ?? []) : 0,
             'first_event_msa_count' => is_array($first) ? count($first['MSA'] ?? []) : 0,
-            'first_event' => $first,
+            'markets_summary' => $summary,
         ];
     }
 
@@ -287,7 +307,53 @@ class MackolikScraper
                 return null;
             };
             $pos = fn($p) => $byPos[(string) $p] ?? null;
+            $mtid = isset($m['MTID']) ? (int) $m['MTID'] : 0;
+            $mst = isset($m['MST']) ? (int) $m['MST'] : 0;
+            $cnt = count($byPos);
 
+            // ---- MTID/MST tabanlı (Nesine'de çoğu markette isim/ON alanı yok) ----
+            // MTID=1: Maç Sonucu (1-X-2) — doğrulandı
+            if ($mtid === 1 && $cnt >= 3) {
+                $this->put($out, 'MS1', $pos(1));
+                $this->put($out, 'MSX', $pos(2));
+                $this->put($out, 'MS2', $pos(3));
+                continue;
+            }
+            // MST=101: Gol Alt/Üst ailesi (SOV=çizgi; N1=Alt, N2=Üst) — doğrulandı
+            if ($mst === 101 && $cnt === 2) {
+                $ln = $this->goalLine($sov, '');
+                if ($ln !== null) {
+                    $this->put($out, 'ALT' . $ln, $pos(1));
+                    $this->put($out, 'UST' . $ln, $pos(2));
+                }
+                continue;
+            }
+            // Ayarlanabilir MTID eşlemesi (nsn sözlüğünden doğrulanıp settings'e girilebilir)
+            $mtidKg = (int) Settings::get('mk_mtid_kg', 0);
+            $mtidCs = (int) Settings::get('mk_mtid_cs', 0);
+            $mtidIy = (int) Settings::get('mk_mtid_iy', 0);
+            if ($mtidKg && $mtid === $mtidKg && $cnt === 2) {
+                $this->put($out, 'KGVAR', $pos(1));
+                $this->put($out, 'KGYOK', $pos(2));
+                continue;
+            }
+            if ($mtidCs && $mtid === $mtidCs && $cnt === 3) {
+                $this->put($out, 'CS1X', $pos(1));
+                $this->put($out, 'CS12', $pos(2));
+                $this->put($out, 'CSX2', $pos(3));
+                continue;
+            }
+            if ($mtidIy && $mtid === $mtidIy && $cnt === 3) {
+                $this->put($out, 'IY1', $pos(1));
+                $this->put($out, 'IYX', $pos(2));
+                $this->put($out, 'IY2', $pos(3));
+                continue;
+            }
+
+            // ---- İsim (MN) tabanlı (MN varsa) ----
+            if ($mn === '') {
+                continue;
+            }
             $isMs = strpos($mn, 'maç sonucu') !== false || strpos($mn, 'mac sonucu') !== false;
             $isIy = (strpos($mn, 'ilk yarı') !== false || strpos($mn, 'i̇lk yarı') !== false || strpos($mn, '1. yarı') !== false)
                 && strpos($mn, 'sonuc') !== false;
@@ -329,10 +395,9 @@ class MackolikScraper
     private function goalLine($sov, string $mn): ?string
     {
         $val = (float) str_replace(',', '.', (string) $sov);
-        $cands = [1.5 => '15', 2.5 => '25', 3.5 => '35'];
-        foreach ($cands as $num => $code) {
-            if (abs($val - $num) < 0.01) {
-                return $code;
+        foreach ([[1.5, '15'], [2.5, '25'], [3.5, '35']] as $c) {
+            if (abs($val - $c[0]) < 0.01) {
+                return $c[1];
             }
         }
         if (strpos($mn, '1,5') !== false || strpos($mn, '1.5') !== false) return '15';
