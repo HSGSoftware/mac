@@ -173,9 +173,12 @@ class MatchController
                 continue;
             }
             $name = (string) ($m['ad'] ?? '');
+            // Anahtar ve grup ORİJİNAL ada göre (kararlılık); görünen ad
+            // admin panelindeki isim eşlemesinden gelebilir.
             $key = Credits::groupKeyForMarketName($name);
             $m['grup'] = $key;
             $m['key'] = Credits::marketKeyFor($name, $m['sov'] ?? null);
+            $m['ad'] = Credits::displayMarketName($name);
             $byGroup[$key][] = $m;
         }
         $groupsOut = [];
@@ -189,7 +192,7 @@ class MatchController
             $unlocked = $tier >= $minTier;
             $groupsOut[] = [
                 'key' => $key,
-                'name' => Credits::GROUP_NAMES[$key],
+                'name' => Credits::groupName($key),
                 'min_tier' => $minTier,
                 'unlocked' => $unlocked,
                 'count' => count($items),

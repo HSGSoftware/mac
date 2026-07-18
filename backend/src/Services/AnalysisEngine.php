@@ -237,7 +237,12 @@ class AnalysisEngine
             if (!$opts) {
                 return null;
             }
-            return ['key' => 'MS', 'label' => 'Maç Sonucu', 'group' => 'ana', 'options' => $opts];
+            return [
+                'key' => 'MS',
+                'label' => Credits::displayMarketName('Maç Sonucu'),
+                'group' => 'ana',
+                'options' => $opts,
+            ];
         }
 
         $stats = $this->stats($matchId);
@@ -263,7 +268,7 @@ class AnalysisEngine
                 return null;
             }
             $sov = $mk['sov'] ?? null;
-            $label = $name . ($sov !== null && $sov !== '' ? " ($sov)" : '');
+            $label = Credits::displayMarketName($name) . ($sov !== null && $sov !== '' ? " ($sov)" : '');
             return [
                 'key' => $key,
                 'label' => $label,

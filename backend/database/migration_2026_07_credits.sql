@@ -65,3 +65,6 @@ CREATE TABLE IF NOT EXISTS user_unlocks (
 -- çalıştırılırsa üstteki idempotent ifadeler yine de uygulanır)
 ALTER TABLE users ADD COLUMN credits_used INT UNSIGNED NOT NULL DEFAULT 0;
 ALTER TABLE users ADD COLUMN credits_date DATE DEFAULT NULL;
+-- Admin'in kullanıcıya eklediği bonus kredi: günlük hak bittikten sonra
+-- harcanır, GÜNLÜK SIFIRLANMAZ (bitene kadar durur)
+ALTER TABLE users ADD COLUMN bonus_credits INT UNSIGNED NOT NULL DEFAULT 0;

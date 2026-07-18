@@ -72,6 +72,40 @@ class Credits
         return max(0, min(3, $val));
     }
 
+    /** Grubun görünen adı (admin panelinden değiştirilebilir). */
+    public static function groupName(string $groupKey): string
+    {
+        $def = self::GROUP_NAMES[$groupKey] ?? $groupKey;
+        $custom = trim((string) Settings::get('group_name_' . $groupKey, ''));
+        return $custom !== '' ? $custom : $def;
+    }
+
+    /**
+     * Market adı override haritası: {"Orijinal Ad":"Yeni Ad", ...}
+     * settings.market_name_overrides içinde JSON olarak saklanır
+     * (admin panelinden satır satır girilir).
+     */
+    public static function marketNameOverrides(): array
+    {
+        $raw = (string) Settings::get('market_name_overrides', '');
+        if ($raw === '') {
+            return [];
+        }
+        $map = json_decode($raw, true);
+        return is_array($map) ? $map : [];
+    }
+
+    /**
+     * Marketin GÖRÜNEN adı. Analiz anahtarı (marketKeyFor) ve grup ataması
+     * her zaman ORİJİNAL ada göre yapılır; bu yalnızca gösterimi değiştirir.
+     */
+    public static function displayMarketName(string $originalName): string
+    {
+        $map = self::marketNameOverrides();
+        $custom = trim((string) ($map[$originalName] ?? ''));
+        return $custom !== '' ? $custom : $originalName;
+    }
+
     /** İstemciye gönderilen maliyet tablosu. */
     public static function costs(): array
     {
@@ -90,18 +124,31 @@ class Credits
         return (int) ($user['credits_used'] ?? 0);
     }
 
-    /** Bugün kalan kredi hakkı. */
+    /** Admin'in eklediği bonus kredi (günlük sıfırlanmaz, bitene kadar durur). */
+    public static function bonus(array $user): int
+    {
+        return max(0, (int) ($user['bonus_credits'] ?? 0));
+    }
+
+    /** Bugünkü günlük haktan kalan (bonus hariç). */
+    public static function dailyRemaining(array $user): int
+    {
+        return max(0, self::dailyAllowance(Plans::tierOf($user)) - self::usedToday($user));
+    }
+
+    /** Toplam kalan kredi: günlük hak + bonus. */
     public static function remaining(?array $user): int
     {
         if (!$user) {
             return 0;
         }
-        return max(0, self::dailyAllowance(Plans::tierOf($user)) - self::usedToday($user));
+        return self::dailyRemaining($user) + self::bonus($user);
     }
 
     /**
-     * Kredi düşer. Yetersizse false döner (harcama yapılmaz).
-     * Tarih değiştiyse sayaç bugünden başlar — dünden kalan devretmez.
+     * Kredi düşer: önce günlük haktan, bitince bonustan. Yetersizse false
+     * döner (harcama yapılmaz). Tarih değiştiyse günlük sayaç bugünden
+     * başlar — dünden kalan devretmez; bonus krediler devreder.
      */
     public static function spend(array $user, int $amount): bool
     {
@@ -111,16 +158,18 @@ class Credits
         if (self::remaining($user) < $amount) {
             return false;
         }
+        $fromDaily = min($amount, self::dailyRemaining($user));
+        $fromBonus = $amount - $fromDaily;
         $today = date('Y-m-d');
         if (($user['credits_date'] ?? null) !== $today) {
             Database::execute(
-                'UPDATE users SET credits_used = ?, credits_date = ? WHERE id = ?',
-                [$amount, $today, $user['id']]
+                'UPDATE users SET credits_used = ?, credits_date = ?, bonus_credits = GREATEST(0, bonus_credits - ?) WHERE id = ?',
+                [$fromDaily, $today, $fromBonus, $user['id']]
             );
         } else {
             Database::execute(
-                'UPDATE users SET credits_used = credits_used + ? WHERE id = ?',
-                [$amount, $user['id']]
+                'UPDATE users SET credits_used = credits_used + ?, bonus_credits = GREATEST(0, bonus_credits - ?) WHERE id = ?',
+                [$fromDaily, $fromBonus, $user['id']]
             );
         }
         return true;

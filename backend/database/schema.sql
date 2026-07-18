@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS users (
     counter_date       DATE DEFAULT NULL,
     credits_used       INT UNSIGNED NOT NULL DEFAULT 0,  -- bugün harcanan kredi
     credits_date       DATE DEFAULT NULL,                -- kredi sayacının günü (gün değişince sıfırlanır)
+    bonus_credits      INT UNSIGNED NOT NULL DEFAULT 0,  -- admin'in eklediği bonus kredi (günlük sıfırlanmaz)
     fcm_token          VARCHAR(255) DEFAULT NULL,
     is_banned          TINYINT(1) NOT NULL DEFAULT 0,
     created_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
