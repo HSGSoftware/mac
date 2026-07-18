@@ -12,8 +12,8 @@ import 'probability_ring.dart';
 /// Maç detayındaki "AI Analiz" sekmesi.
 class AnalysisTab extends ConsumerStatefulWidget {
   final int matchId;
-  final Analysis? initial;
-  const AnalysisTab({super.key, required this.matchId, this.initial});
+  final bool hasAnalysis;
+  const AnalysisTab({super.key, required this.matchId, this.hasAnalysis = false});
 
   @override
   ConsumerState<AnalysisTab> createState() => _AnalysisTabState();
@@ -26,19 +26,14 @@ class _AnalysisTabState extends ConsumerState<AnalysisTab> {
 
   static const _stages = [
     'Maç verileri toplanıyor…',
-    'Son 10 maç formu inceleniyor…',
+    'Son maçların formu inceleniyor…',
     'Karşılaşma geçmişi (H2H) analiz ediliyor…',
-    'Oranlar değerlendiriliyor…',
+    'Güncel oranlar değerlendiriliyor…',
+    'Değerli oranlar (value bet) hesaplanıyor…',
     'Yapay zeka olasılıkları hesaplıyor…',
   ];
   int _stageIndex = 0;
   Timer? _stageTimer;
-
-  @override
-  void initState() {
-    super.initState();
-    _analysis = widget.initial;
-  }
 
   @override
   void dispose() {
@@ -52,7 +47,8 @@ class _AnalysisTabState extends ConsumerState<AnalysisTab> {
       _error = null;
       _stageIndex = 0;
     });
-    _stageTimer = Timer.periodic(const Duration(seconds: 3), (t) {
+    final started = DateTime.now();
+    _stageTimer = Timer.periodic(const Duration(milliseconds: 1600), (t) {
       if (_stageIndex < _stages.length - 1) {
         setState(() => _stageIndex++);
       }
@@ -61,14 +57,21 @@ class _AnalysisTabState extends ConsumerState<AnalysisTab> {
       final data = await ref
           .read(apiClientProvider)
           .post('/matches/${widget.matchId}/analyze');
-      setState(() => _analysis =
-          Analysis.fromJson(Map<String, dynamic>.from(data['analysis'])));
+      final result = Analysis.fromJson(Map<String, dynamic>.from(data['analysis']));
+      // Önbellekten anında dönse bile kullanıcıya sıfırdan analiz hissi ver:
+      // animasyonu en az bu süre kadar oynat.
+      const minShow = Duration(seconds: 8);
+      final elapsed = DateTime.now().difference(started);
+      if (elapsed < minShow) {
+        await Future.delayed(minShow - elapsed);
+      }
+      if (mounted) setState(() => _analysis = result);
       ref.read(authProvider.notifier).refreshMe();
     } on ApiException catch (e) {
       if (e.code == 'limit_reached') {
         if (mounted) _showPremiumSheet(e.message);
       } else {
-        setState(() => _error = e.message);
+        if (mounted) setState(() => _error = e.message);
       }
     } finally {
       _stageTimer?.cancel();

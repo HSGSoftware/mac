@@ -3,6 +3,7 @@
 namespace MacRadar\Controllers\Api;
 
 use MacRadar\Core\Auth;
+use MacRadar\Core\Config;
 use MacRadar\Core\Database;
 use MacRadar\Core\Request;
 use MacRadar\Core\Response;
@@ -28,8 +29,11 @@ class MatchController
                 LEFT JOIN teams at ON at.id = m.away_team_id
                 WHERE DATE(m.start_time) = ?
                   AND m.start_time >= ?";
-        // Başlama saati geçmiş maçları gösterme (bugün için sadece yaklaşanlar)
-        $params = [$date, date('Y-m-d H:i:s')];
+        // Başlama saati geçmiş maçları gösterme. Karşılaştırmayı, maç saatlerinin
+        // saklandığı zaman dilimiyle (Europe/Istanbul) AÇIKÇA yap — sunucu UTC olsa bile doğru.
+        $tz = new \DateTimeZone(Config::get('app.timezone', 'Europe/Istanbul'));
+        $nowLocal = (new \DateTime('now', $tz))->format('Y-m-d H:i:s');
+        $params = [$date, $nowLocal];
         if ($leagueId) {
             $sql .= ' AND m.league_id = ?';
             $params[] = $leagueId;

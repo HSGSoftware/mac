@@ -24,7 +24,7 @@ class MatchDetailScreen extends ConsumerWidget {
         data: (d) {
           final match = d.match;
           return DefaultTabController(
-            length: 3,
+            length: 2,
             child: Column(
               children: [
                 _header(match),
@@ -34,7 +34,6 @@ class MatchDetailScreen extends ConsumerWidget {
                   indicatorColor: AppColors.primary,
                   tabs: [
                     Tab(text: 'Oranlar'),
-                    Tab(text: 'Karşılaştırma'),
                     Tab(text: 'AI Analiz'),
                   ],
                 ),
@@ -42,8 +41,7 @@ class MatchDetailScreen extends ConsumerWidget {
                   child: TabBarView(
                     children: [
                       _OddsTab(odds: d.odds),
-                      _StatsTab(stats: d.stats),
-                      AnalysisTab(matchId: matchId, initial: d.analysis),
+                      AnalysisTab(matchId: matchId, hasAnalysis: d.analysis != null),
                     ],
                   ),
                 ),
