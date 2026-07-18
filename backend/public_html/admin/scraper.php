@@ -56,10 +56,26 @@ render_flash();
 
 <?php if ($rawSample !== null): ?>
 <div class="card p-3 mb-4">
-    <h5 class="text-light mb-2">Nesine Ham Örnek (ilk maç)</h5>
-    <p class="text-secondary small mb-2">Bu içeriğin ekran görüntüsünü/metnini geliştiriciye iletin; market ve oran alanları buna göre eşlenecek.</p>
-    <pre style="background:#0d1b2a;color:#93e6c0;padding:12px;border-radius:8px;max-height:420px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:12px;"><?= e(json_encode($rawSample, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?></pre>
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <h5 class="text-light mb-0">Nesine Ham Örnek (ilk maç)</h5>
+        <button type="button" class="btn btn-sm btn-info" onclick="copyRaw(this)"><i class="bi bi-clipboard"></i> Kopyala</button>
+    </div>
+    <p class="text-secondary small mb-2">"Kopyala" ile panoya alıp geliştiriciye yapıştırın; market ve oran alanları buna göre eşlenecek.</p>
+    <textarea id="rawSampleData" readonly onclick="this.select()" style="width:100%;height:360px;background:#0d1b2a;color:#93e6c0;padding:12px;border-radius:8px;border:1px solid #22314a;font-size:12px;font-family:monospace;white-space:pre;overflow:auto;"><?= e(json_encode($rawSample, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?></textarea>
 </div>
+<script>
+function copyRaw(btn){
+    var ta = document.getElementById('rawSampleData');
+    ta.select();
+    ta.setSelectionRange(0, 999999);
+    var done = function(){ btn.innerHTML = '<i class="bi bi-check2"></i> Kopyalandı'; setTimeout(function(){ btn.innerHTML = '<i class="bi bi-clipboard"></i> Kopyala'; }, 2000); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(ta.value).then(done, function(){ document.execCommand('copy'); done(); });
+    } else {
+        document.execCommand('copy'); done();
+    }
+}
+</script>
 <?php endif; ?>
 
 <div class="card p-4 mb-4">
