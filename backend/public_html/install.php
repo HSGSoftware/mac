@@ -5,7 +5,21 @@
  * GÜVENLİK: Kurulum bitince BU DOSYAYI SUNUCUDAN SİLİN.
  */
 
-require_once dirname(__DIR__) . '/src/autoload.php';
+// autoload.php ve schema.sql'i yukarı doğru ara (farklı dizin düzenlerine dayanıklı)
+$autoloadDir = null;
+(function () use (&$autoloadDir) {
+    $dir = __DIR__;
+    for ($i = 0; $i < 5; $i++) {
+        if (is_file($dir . '/src/autoload.php')) {
+            require_once $dir . '/src/autoload.php';
+            $GLOBALS['__base_dir'] = $dir;
+            return;
+        }
+        $dir = dirname($dir);
+    }
+    http_response_code(500);
+    exit('autoload.php bulunamadı.');
+})();
 
 use MacRadar\Core\Config;
 use MacRadar\Core\Database;
@@ -18,7 +32,7 @@ echo '<html><head><meta charset="utf-8"><title>MaçRadar Kurulum</title>'
    . '.ok{color:#00e676}.err{color:#ef5350}code{background:#1b263b;padding:2px 6px;border-radius:4px}</style></head><body>';
 echo '<h1>📊 MaçRadar Kurulum</h1>';
 
-$schemaPath = dirname(__DIR__) . '/database/schema.sql';
+$schemaPath = ($GLOBALS['__base_dir'] ?? dirname(__DIR__)) . '/database/schema.sql';
 if (!is_file($schemaPath)) {
     echo '<p class="err">schema.sql bulunamadı: ' . htmlspecialchars($schemaPath) . '</p></body></html>';
     exit;

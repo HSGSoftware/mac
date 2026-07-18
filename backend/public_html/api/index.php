@@ -4,7 +4,19 @@
  * Tüm /api/v1/* istekleri buraya yönlenir (.htaccess ile).
  */
 
-require_once dirname(__DIR__, 2) . '/src/autoload.php';
+// autoload.php'yi yukarı doğru ara (farklı dizin düzenlerine dayanıklı)
+(function () {
+    $dir = __DIR__;
+    for ($i = 0; $i < 5; $i++) {
+        if (is_file($dir . '/src/autoload.php')) {
+            require_once $dir . '/src/autoload.php';
+            return;
+        }
+        $dir = dirname($dir);
+    }
+    http_response_code(500);
+    exit('autoload.php bulunamadı.');
+})();
 
 use MacRadar\Core\Config;
 use MacRadar\Core\Request;

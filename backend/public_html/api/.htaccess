@@ -1,6 +1,5 @@
 # Tüm /api/v1/* isteklerini index.php'ye yönlendir
 RewriteEngine On
-RewriteBase /api/
 
 # Gerçek dosya/klasör değilse index.php'ye
 RewriteCond %{REQUEST_FILENAME} !-f
