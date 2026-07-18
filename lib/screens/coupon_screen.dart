@@ -9,14 +9,14 @@ import '../widgets/badges.dart';
 import '../widgets/paywall_sheet.dart';
 import 'app_header.dart';
 
-/// Günün Kuponu ekranı: modelin en yüksek değer marjlı seçimleri.
+/// Günün AI Kuponu ekranı: modelin en yüksek değer marjlı seçimleri.
 class CouponScreen extends ConsumerWidget {
   const CouponScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Günün Kuponu yalnızca Altın (3) pakette
-    final unlocked = (ref.watch(authProvider).user?.tier ?? 0) >= 3;
+    // Günün AI Kuponu Gümüş (2) ve Altın (3) paketlerde görülebilir
+    final unlocked = (ref.watch(authProvider).user?.tier ?? 0) >= 2;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -56,7 +56,7 @@ class CouponScreen extends ConsumerWidget {
                 children: [
                   const Icon(Icons.lock_outline, color: AppColors.gold, size: 20),
                   const SizedBox(width: 9),
-                  Text('Günün kuponu Altın pakette',
+                  Text('Günün AI kuponu Gümüş ve Altın pakette',
                       style: AppText.sans(
                           size: 13.5,
                           weight: FontWeight.w800,
@@ -65,7 +65,7 @@ class CouponScreen extends ConsumerWidget {
               ),
               const SizedBox(height: 10),
               Text(
-                  'Modelin seçimleri, gerekçeleri ve kombine olasılık hesabı Altın paket üyelerine açık.',
+                  'Modelin seçimleri, gerekçeleri ve kombine olasılık hesabı Gümüş ve Altın paket üyelerine açık.',
                   style: AppText.sans(
                       size: 12,
                       weight: FontWeight.w500,
@@ -77,8 +77,8 @@ class CouponScreen extends ConsumerWidget {
                   style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.gold,
                       foregroundColor: const Color(0xFF2A2008)),
-                  onPressed: () => showPaywall(context, highlightTier: 3),
-                  child: const Text("Altın pakete geç"),
+                  onPressed: () => showPaywall(context, highlightTier: 2),
+                  child: const Text("Gümüş pakete geç"),
                 ),
               ),
             ],

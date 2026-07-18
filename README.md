@@ -30,7 +30,10 @@ Admin Panel  ──────────►  PHP (public_html/admin)      ▲
 
 - **Backend:** Framework'süz saf PHP (PSR-4 autoload, harici bağımlılık yok). PDO/MySQL.
 - **Analiz:** İstek üzerine üretilir ve DB'de önbelleğe alınır — aynı maç için tek AI çağrısı.
-- **Üyelik:** Ücretsiz (günlük limitli) / Premium (sınırsız).
+- **Üyelik & Token:** 4 kademe (Ücretsiz / Bronz / Gümüş / Altın). Her paketin
+  **günlük token hakkı** vardır; tokenlar her gün sıfırlanır, ertesi güne devretmez.
+  Market grupları ve AI analizleri token harcanarak açılır (maç başına bir kez).
+  Günün AI Kuponu: Gümüş + Altın. Canlı maç AI tahminleri: yalnız Altın (token ile).
 
 ## Dizin yapısı
 
@@ -129,11 +132,12 @@ API adresi `API_BASE_URL` environment variable'ı ile derleme zamanında enjekte
 | GET | `/leagues` | Ligler |
 | GET | `/matches?date=YYYY-MM-DD` | Bülten (lige gruplu, listede model `signal` alanı) |
 | GET | `/matches/live` | Canlı maçlar (canlı oran + skor) |
-| GET | `/matches/{id}` | Maç detayı (oran + tüm marketler + istatistik + analiz) |
-| POST | `/matches/{id}/analyze` | AI analizi iste (önbellekli, limitli) |
-| GET | `/matches/{id}/analysis` | Mevcut analiz |
+| GET | `/matches/{id}` | Maç detayı (oran + grup kilitleri `market_groups` + açık marketler + istatistik + açılmışsa analiz) |
+| POST | `/matches/{id}/unlock-group` | Market grubunu token ile aç (`{group: ana\|gol\|handikap\|ozel}`) |
+| POST | `/matches/{id}/analyze` | AI analizi (token ile açılır; canlı maçta yalnız Altın) |
+| GET | `/matches/{id}/analysis` | Mevcut analiz (yalnız token ile açan kullanıcıya) |
 | GET | `/me/analyses` | "Analizlerim" — kullanıcının incelediği maçlar + isabet |
-| GET | `/coupon/daily` | "Günün Kuponu" — en yüksek değer marjlı 3 seçim |
+| GET | `/coupon/daily` | "Günün AI Kuponu" — Gümüş + Altın |
 | GET/POST/DELETE | `/favorites` | Favoriler |
 | GET | `/stats/success-rate` | AI isabet istatistikleri |
 

@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS users (
     premium_until      DATETIME DEFAULT NULL,
     daily_analysis_count INT UNSIGNED NOT NULL DEFAULT 0,
     counter_date       DATE DEFAULT NULL,
+    tokens_used        INT UNSIGNED NOT NULL DEFAULT 0,  -- bugün harcanan token
+    tokens_date        DATE DEFAULT NULL,                -- token sayacının günü (gün değişince sıfırlanır)
     fcm_token          VARCHAR(255) DEFAULT NULL,
     is_banned          TINYINT(1) NOT NULL DEFAULT 0,
     created_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -166,6 +168,24 @@ CREATE TABLE IF NOT EXISTS user_favorites (
     CONSTRAINT fk_fav_match FOREIGN KEY (match_id) REFERENCES matches(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- ---------- Token ile açılan içerikler ----------
+-- Market grubu / AI analizi token harcanarak maç başına bir kez açılır;
+-- tekrar görüntüleme ücretsizdir.
+CREATE TABLE IF NOT EXISTS user_unlocks (
+    id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    user_id      BIGINT UNSIGNED NOT NULL,
+    match_id     BIGINT UNSIGNED NOT NULL,
+    item_type    VARCHAR(20) NOT NULL,             -- market_group / analysis
+    item_key     VARCHAR(30) NOT NULL DEFAULT '',  -- grup anahtarı (ana/gol/handikap/ozel)
+    tokens_spent INT UNSIGNED NOT NULL DEFAULT 0,
+    created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_unlock (user_id, match_id, item_type, item_key),
+    KEY idx_unlock_user_match (user_id, match_id),
+    CONSTRAINT fk_unlock_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    CONSTRAINT fk_unlock_match FOREIGN KEY (match_id) REFERENCES matches(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- ---------- Ayarlar (key/value) ----------
 CREATE TABLE IF NOT EXISTS settings (
     skey        VARCHAR(80) NOT NULL,
@@ -214,6 +234,16 @@ INSERT INTO settings (skey, svalue) VALUES
     ('free_daily_limit', '3'),
     ('bronz_daily_limit', '15'),
     ('gumus_daily_limit', '40'),
+    ('free_daily_tokens', '10'),
+    ('bronz_daily_tokens', '100'),
+    ('gumus_daily_tokens', '250'),
+    ('altin_daily_tokens', '600'),
+    ('token_cost_group_ana', '10'),
+    ('token_cost_group_gol', '15'),
+    ('token_cost_group_handikap', '20'),
+    ('token_cost_group_ozel', '25'),
+    ('token_cost_analysis', '25'),
+    ('token_cost_live_analysis', '40'),
     ('scraper_base_url', 'https://www.mackolik.com'),
     ('scraper_user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36'),
     ('announcement', '')

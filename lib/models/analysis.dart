@@ -122,12 +122,14 @@ class MarketOutcome {
 class BetMarket {
   final String name;
   final double? line; // gol çizgisi (SOV), varsa
+  final String? group; // sunucunun atadığı grup anahtarı (ana/gol/handikap/ozel)
   final List<MarketOutcome> outcomes;
-  BetMarket({required this.name, this.line, required this.outcomes});
+  BetMarket({required this.name, this.line, this.group, required this.outcomes});
 
   factory BetMarket.fromJson(Map<String, dynamic> j) => BetMarket(
         name: j['ad']?.toString() ?? 'Market',
         line: (j['sov'] as num?)?.toDouble(),
+        group: j['grup']?.toString(),
         outcomes: ((j['secenekler'] as List?) ?? [])
             .whereType<Map>()
             .map((e) => MarketOutcome.fromJson(Map<String, dynamic>.from(e)))
@@ -135,21 +137,59 @@ class BetMarket {
       );
 }
 
-/// Maç detay yanıtı: maç + oranlar + tüm marketler + istatistikler + (varsa) analiz.
+/// Bir market grubunun token kilit durumu (sunucudan gelir).
+class MarketGroupInfo {
+  final String key; // ana / gol / handikap / ozel
+  final String name;
+  final int cost; // açmak için gereken token
+  final bool unlocked;
+  final int count; // gruptaki market sayısı
+
+  MarketGroupInfo({
+    required this.key,
+    required this.name,
+    required this.cost,
+    required this.unlocked,
+    required this.count,
+  });
+
+  factory MarketGroupInfo.fromJson(Map<String, dynamic> j) => MarketGroupInfo(
+        key: j['key']?.toString() ?? '',
+        name: j['name']?.toString() ?? '',
+        cost: (j['cost'] as num?)?.toInt() ?? 0,
+        unlocked: j['unlocked'] as bool? ?? false,
+        count: (j['count'] as num?)?.toInt() ?? 0,
+      );
+}
+
+/// Maç detay yanıtı: maç + oranlar + açık marketler + grup kilitleri +
+/// istatistikler + (token ile açılmışsa) analiz.
 class MatchDetail {
   final Map<String, dynamic> match;
   final Map<String, double> odds;
-  final List<BetMarket> markets;
+  final List<BetMarket> markets; // yalnızca açılmış grupların marketleri
+  final List<MarketGroupInfo> marketGroups;
   final Map<String, dynamic> stats;
   final Analysis? analysis;
+  final bool analysisExists; // analiz üretilmiş ama kilitli olabilir
+  final Map<String, int> tokenCosts; // analysis / live_analysis / group_<key>
+  final int? tokensLeft; // giriş yapan kullanıcının kalan günlük tokenı
 
   MatchDetail({
     required this.match,
     required this.odds,
     required this.markets,
+    this.marketGroups = const [],
     required this.stats,
     this.analysis,
+    this.analysisExists = false,
+    this.tokenCosts = const {},
+    this.tokensLeft,
   });
+
+  /// Kullanıcının bu maçta açtığı grup anahtarları.
+  Set<String> get unlockedGroupKeys =>
+      marketGroups.where((g) => g.unlocked).map((g) => g.key).toSet();
 
   factory MatchDetail.fromJson(Map<String, dynamic> j) {
     final odds = <String, double>{};
@@ -166,14 +206,39 @@ class MatchDetail {
         }
       }
     }
+    final groups = <MarketGroupInfo>[];
+    if (j['market_groups'] is List) {
+      for (final g in (j['market_groups'] as List)) {
+        if (g is Map) {
+          groups.add(MarketGroupInfo.fromJson(Map<String, dynamic>.from(g)));
+        }
+      }
+    }
+    final costs = <String, int>{};
+    if (j['token_costs'] is Map) {
+      final tc = j['token_costs'] as Map;
+      if (tc['analysis'] is num) costs['analysis'] = (tc['analysis'] as num).toInt();
+      if (tc['live_analysis'] is num) {
+        costs['live_analysis'] = (tc['live_analysis'] as num).toInt();
+      }
+      if (tc['groups'] is Map) {
+        (tc['groups'] as Map).forEach((k, v) {
+          if (v is num) costs['group_$k'] = v.toInt();
+        });
+      }
+    }
     return MatchDetail(
       match: j['match'] is Map ? Map<String, dynamic>.from(j['match']) : {},
       odds: odds,
       markets: markets,
+      marketGroups: groups,
       stats: j['stats'] is Map ? Map<String, dynamic>.from(j['stats']) : {},
       analysis: j['analysis'] is Map
           ? Analysis.fromJson(Map<String, dynamic>.from(j['analysis']))
           : null,
+      analysisExists: j['analysis_exists'] as bool? ?? j['analysis'] is Map,
+      tokenCosts: costs,
+      tokensLeft: (j['tokens_left'] as num?)?.toInt(),
     );
   }
 }

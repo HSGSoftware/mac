@@ -15,13 +15,14 @@ class AccountScreen extends ConsumerWidget {
 
   /// (özellik, gereken kademe)
   static const _perks = <(String, int)>[
-    ('Ana Marketler + AI analizi', 0),
-    ('Gol Marketleri analizi', 1),
-    ('Handikap & Kombine analizleri', 2),
-    ('Bültende DEĞER sinyalleri', 2),
-    ('Özel marketler (tümü)', 3),
-    ('Günün Kuponu', 3),
-    ('Sınırsız AI analizi', 3),
+    ('Günlük token hakkı (her gün yenilenir)', 0),
+    ('Market gruplarını token ile açma', 0),
+    ('AI maç analizleri (token ile)', 0),
+    ('Günde 100 token', 1),
+    ('Günde 250 token', 2),
+    ('Günün AI Kuponu', 2),
+    ('Günde 600 token', 3),
+    ('Canlı maçlarda AI tahminleri', 3),
   ];
 
   @override
@@ -80,9 +81,11 @@ class AccountScreen extends ConsumerWidget {
                 ],
               ),
               const SizedBox(height: 16),
+              _tokenCard(user?.tokensLeft ?? 0, user?.dailyTokens ?? 0),
+              const SizedBox(height: 12),
               premium
                   ? _premiumCard(context, tier, user?.premiumUntil)
-                  : _freeCard(context, user?.dailyAnalysisCount ?? 0),
+                  : _freeCard(context),
               const SizedBox(height: 16),
               Text('PAKET AYRICALIKLARI', style: AppText.section()),
               const SizedBox(height: 8),
@@ -228,7 +231,59 @@ class AccountScreen extends ConsumerWidget {
     );
   }
 
-  Widget _freeCard(BuildContext context, int used) {
+  /// Günlük token bakiyesi kartı (her gün sıfırlanır, devretmez).
+  Widget _tokenCard(int left, int daily) {
+    final ratio = daily > 0 ? (left / daily).clamp(0.0, 1.0) : 0.0;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.surface2),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.token_outlined, size: 16, color: AppColors.primary),
+              const SizedBox(width: 7),
+              Expanded(
+                child: Text('GÜNLÜK TOKEN',
+                    style: AppText.sans(
+                        size: 10.5,
+                        weight: FontWeight.w800,
+                        color: AppColors.primary,
+                        letterSpacing: 0.8)),
+              ),
+              Text('$left / $daily',
+                  style: AppText.mono(size: 13, color: AppColors.textPrimary)),
+            ],
+          ),
+          const SizedBox(height: 9),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: ratio,
+              minHeight: 6,
+              backgroundColor: AppColors.surface2,
+              color: AppColors.primary,
+            ),
+          ),
+          const SizedBox(height: 7),
+          Text(
+              'Token hakkınız her gün yenilenir; kullanılmayan tokenlar ertesi güne devretmez. '
+              'Market grupları ve AI analizleri token ile açılır.',
+              style: AppText.sans(
+                  size: 10.5,
+                  weight: FontWeight.w500,
+                  color: AppColors.textSecondary)),
+        ],
+      ),
+    );
+  }
+
+  Widget _freeCard(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -247,7 +302,9 @@ class AccountScreen extends ConsumerWidget {
               style: AppText.sans(
                   size: 14.5, weight: FontWeight.w800, color: const Color(0xFFE7CE8B))),
           const SizedBox(height: 5),
-          Text('Gol, Handikap ve Özel market grupları paketlerle açılır.',
+          Text(
+              'Günlük tokenınız bir maçın bir market grubunu açmaya yeter. '
+              'Paketlerle günlük token hakkınız artar.',
               style: AppText.sans(
                   size: 11.5, weight: FontWeight.w500, color: const Color(0xFFC9B279))),
           const SizedBox(height: 12),

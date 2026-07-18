@@ -4,8 +4,10 @@ namespace MacRadar\Controllers\Api;
 
 use MacRadar\Core\Auth;
 use MacRadar\Core\Database;
+use MacRadar\Core\Plans;
 use MacRadar\Core\Request;
 use MacRadar\Core\Response;
+use MacRadar\Core\Tokens;
 
 class AuthController
 {
@@ -80,6 +82,7 @@ class AuthController
 
     private function publicUser(array $u): array
     {
+        $tier = Plans::tierOf($u);
         return [
             'id' => (int) $u['id'],
             'email' => $u['email'],
@@ -87,6 +90,10 @@ class AuthController
             'plan' => $u['plan'],
             'premium_until' => $u['premium_until'],
             'daily_analysis_count' => (int) $u['daily_analysis_count'],
+            // Günlük token sistemi: hak her gün sıfırlanır, devretmez
+            'daily_tokens' => Tokens::dailyAllowance($tier),
+            'tokens_used_today' => Tokens::usedToday($u),
+            'tokens_left' => Tokens::remaining($u),
             'created_at' => $u['created_at'],
         ];
     }

@@ -3,11 +3,12 @@
 namespace MacRadar\Core;
 
 /**
- * Üyelik paketleri (3 kademeli premium).
- *   0 = free (Ücretsiz)  — Ana Marketler
- *   1 = bronz            — + Gol Marketleri
- *   2 = gumus            — + Handikap & Kombine, bülten DEĞER sinyalleri
- *   3 = altin            — + Özel Marketler, Günün Kuponu, sınırsız analiz
+ * Üyelik paketleri (3 kademeli premium) + günlük TOKEN sistemi.
+ *   0 = free (Ücretsiz)  — günlük küçük token hakkı (bir maçın bir market grubu kadar)
+ *   1 = bronz            — daha fazla günlük token
+ *   2 = gumus            — + Günün AI Kuponu, daha fazla günlük token
+ *   3 = altin            — + Canlı maç AI tahminleri, en yüksek günlük token
+ * Token hakları her gün sıfırlanır (devretmez); bkz. Core\Tokens.
  * Eski 'premium' değeri Altın'a eşdeğer sayılır (geriye uyumluluk).
  */
 class Plans
@@ -35,7 +36,10 @@ class Plans
         return $tier;
     }
 
-    /** Kademeye göre günlük analiz limiti (Altın sınırsız => null). */
+    /**
+     * ESKİ sistem: kademeye göre günlük analiz limiti (Altın sınırsız => null).
+     * Token sistemine geçildi (Core\Tokens); geriye uyumluluk için duruyor.
+     */
     public static function dailyLimit(int $tier): ?int
     {
         switch ($tier) {

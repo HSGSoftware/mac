@@ -24,21 +24,21 @@ class _Package {
 
 const _packages = [
   _Package(1, 'Bronz', '₺99', Color(0xFFCD9B6A), [
-    'Ana Marketler + Gol Marketleri analizi',
-    'Günde 15 AI analizi',
-    'Model olasılıkları ve gerekçeler',
+    'Günde 100 token',
+    'Market gruplarını token ile açma',
+    'AI maç analizleri (token ile)',
   ]),
   _Package(2, 'Gümüş', '₺179', Color(0xFFB8C4CE), [
-    'Bronz paketteki her şey',
-    'Handikap & Kombine market analizleri',
+    'Günde 250 token',
+    'Günün AI Kuponu',
     'Bültende DEĞER sinyalleri ve model favorisi',
-    'Günde 40 AI analizi',
+    'Tüm market grupları + AI analizleri (token ile)',
   ]),
   _Package(3, 'Altın', '₺279', AppColors.gold, [
-    'Gümüş paketteki her şey',
-    'Özel marketler dahil TÜM market analizleri',
-    'Günün Kuponu (en yüksek değerli seçimler)',
-    'Sınırsız AI analizi',
+    'Günde 600 token',
+    'Canlı maçlarda AI tahminleri (token ile)',
+    'Günün AI Kuponu',
+    'Tüm market grupları + AI analizleri (token ile)',
   ]),
 ];
 
@@ -101,7 +101,8 @@ class _PaywallSheetState extends State<_PaywallSheet> {
               ],
             ),
             const SizedBox(height: 6),
-            Text('Paketin yükseldikçe daha fazla market grubu açılır.',
+            Text(
+                'Her paketin günlük token hakkı vardır; tokenlar her gün yenilenir, ertesi güne devretmez. Market grupları ve AI analizleri token ile açılır.',
                 style: AppText.sans(
                     size: 12,
                     weight: FontWeight.w500,

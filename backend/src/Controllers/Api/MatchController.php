@@ -9,6 +9,7 @@ use MacRadar\Core\Plans;
 use MacRadar\Core\Request;
 use MacRadar\Core\Response;
 use MacRadar\Core\Settings;
+use MacRadar\Core\Tokens;
 use MacRadar\Services\MackolikScraper;
 
 class MatchController
@@ -162,18 +163,102 @@ class MatchController
             [$id]
         );
 
-        // Tüm marketler ayrı bir liste alanında döner (detay ekranı)
         $markets = $stats['markets'] ?? [];
         unset($stats['markets']);
+        $markets = array_values(is_array($markets) ? $markets : []);
+
+        // Token sistemi: marketler gruplara ayrılır; yalnızca kullanıcının
+        // token harcayarak açtığı grupların marketleri gönderilir.
+        $byGroup = [];
+        foreach ($markets as $m) {
+            if (!is_array($m)) {
+                continue;
+            }
+            $key = Tokens::groupKeyForMarketName((string) ($m['ad'] ?? ''));
+            $m['grup'] = $key;
+            $byGroup[$key][] = $m;
+        }
+        $unlockedKeys = $viewer ? Tokens::unlockedGroups((int) $viewer['id'], $id) : [];
+        $groupsOut = [];
+        $visibleMarkets = [];
+        foreach (Tokens::GROUP_KEYS as $key) {
+            $items = $byGroup[$key] ?? [];
+            $unlocked = in_array($key, $unlockedKeys, true);
+            $groupsOut[] = [
+                'key' => $key,
+                'name' => Tokens::GROUP_NAMES[$key],
+                'cost' => Tokens::groupCost($key),
+                'unlocked' => $unlocked,
+                'count' => count($items),
+            ];
+            if ($unlocked) {
+                foreach ($items as $it) {
+                    $visibleMarkets[] = $it;
+                }
+            }
+        }
+
+        // AI analizi de token ile açılır: yalnızca açan kullanıcıya gönderilir
+        $analysisUnlocked = $viewer && Tokens::isUnlocked((int) $viewer['id'], $id, 'analysis');
 
         Response::ok([
             'match' => $this->presentDetail($row),
             // Boş dizi PHP'de JSON [] üretir; istemci Map beklediği için obje olarak gönder.
             'odds' => (object) $odds,
-            'markets' => array_values(is_array($markets) ? $markets : []),
+            'markets' => $visibleMarkets,
+            'market_groups' => $groupsOut,
             'stats' => (object) $stats,
-            'analysis' => $analysis ? $this->presentAnalysis($analysis) : null,
+            'analysis' => ($analysis && $analysisUnlocked) ? $this->presentAnalysis($analysis) : null,
+            'analysis_exists' => (bool) $analysis,
+            'token_costs' => Tokens::costs(),
+            'tokens_left' => $viewer ? Tokens::remaining($viewer) : null,
         ]);
+    }
+
+    /**
+     * POST /matches/{id}/unlock-group {group}
+     * Bir market grubunu token harcayarak açar (maç başına bir kez).
+     */
+    public function unlockGroup(Request $req): void
+    {
+        $user = Auth::require($req);
+        $matchId = (int) $req->params['id'];
+        $group = (string) $req->input('group');
+
+        if (!in_array($group, Tokens::GROUP_KEYS, true)) {
+            Response::error('invalid_group', 'Geçersiz market grubu.', 422);
+        }
+        $match = Database::fetch('SELECT id FROM matches WHERE id = ?', [$matchId]);
+        if (!$match) {
+            Response::error('not_found', 'Maç bulunamadı.', 404);
+        }
+
+        // Daha önce açıldıysa tekrar ücret alınmaz
+        if (Tokens::isUnlocked((int) $user['id'], $matchId, 'market_group', $group)) {
+            Response::ok([
+                'group' => $group,
+                'already_unlocked' => true,
+                'tokens_left' => Tokens::remaining($user),
+            ], 'Bu grup zaten açık.');
+        }
+
+        $cost = Tokens::groupCost($group);
+        $remaining = Tokens::remaining($user);
+        if ($remaining < $cost) {
+            Response::error(
+                'insufficient_tokens',
+                "Token hakkınız yetersiz (gereken: $cost, kalan: $remaining). Token hakları her gün yenilenir; daha yüksek paketle günlük token hakkınız artar.",
+                429,
+                ['cost' => $cost, 'remaining' => $remaining, 'tier' => Plans::tierOf($user)]
+            );
+        }
+        Tokens::spend($user, $cost);
+        Tokens::recordUnlock((int) $user['id'], $matchId, 'market_group', $group, $cost);
+        Response::ok([
+            'group' => $group,
+            'already_unlocked' => false,
+            'tokens_left' => max(0, $remaining - $cost),
+        ], Tokens::GROUP_NAMES[$group] . ' açıldı.');
     }
 
     /** GET /leagues */
@@ -461,19 +546,19 @@ class MatchController
         ]);
     }
 
-    /** GET /coupon/daily — modelin bugünkü en yüksek değer marjlı seçimlerinden kupon (Altın paket) */
+    /** GET /coupon/daily — modelin bugünkü en yüksek değer marjlı seçimlerinden kupon (Gümüş ve Altın) */
     public function dailyCoupon(Request $req): void
     {
         $tz = new \DateTimeZone(Config::get('app.timezone', 'Europe/Istanbul'));
         $today = (new \DateTime('now', $tz))->format('Y-m-d');
 
-        // Günün Kuponu yalnızca Altın pakette
+        // Günün AI Kuponu Gümüş ve Altın paketlerde görülebilir
         $viewer = Auth::optional($req);
-        if (Plans::tierOf($viewer) < 3) {
+        if (Plans::tierOf($viewer) < 2) {
             Response::ok([
                 'date' => $today,
                 'locked' => true,
-                'required_plan' => 'altin',
+                'required_plan' => 'gumus',
                 'picks' => [],
                 'summary' => (object) [],
             ]);

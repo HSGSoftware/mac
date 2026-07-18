@@ -64,6 +64,9 @@ $router->get('/matches/{id}', [$matches, 'show']);
 $router->post('/matches/{id}/analyze', [$analysis, 'analyze']);
 $router->get('/matches/{id}/analysis', [$analysis, 'show']);
 
+// ---- Token: market grubu açma ----
+$router->post('/matches/{id}/unlock-group', [$matches, 'unlockGroup']);
+
 // ---- Favoriler ----
 $router->get('/favorites', [$matches, 'favorites']);
 $router->post('/favorites', [$matches, 'addFavorite']);

@@ -57,21 +57,75 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
           .read(apiClientProvider)
           .post('/matches/${widget.matchId}/analyze');
       final result = Analysis.fromJson(Map<String, dynamic>.from(data['analysis']));
-      const minShow = Duration(seconds: 7);
-      final elapsed = DateTime.now().difference(started);
-      if (elapsed < minShow) await Future.delayed(minShow - elapsed);
+      // Önbellekten dönen (daha önce üretilmiş) analizde sahte bekleme yapma
+      if (data['cached'] != true) {
+        const minShow = Duration(seconds: 7);
+        final elapsed = DateTime.now().difference(started);
+        if (elapsed < minShow) await Future.delayed(minShow - elapsed);
+      }
       if (mounted) setState(() => _analysis = result);
       ref.read(authProvider.notifier).refreshMe();
     } on ApiException catch (e) {
-      if (e.code == 'limit_reached') {
-        if (mounted) showPaywall(context);
-      } else if (mounted) {
+      if (!mounted) return;
+      if (e.code == 'insufficient_tokens' || e.code == 'limit_reached') {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.message)));
+        showPaywall(context);
+      } else if (e.code == 'live_locked') {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.message)));
+        showPaywall(context, highlightTier: 3);
+      } else {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text(e.message)));
       }
     } finally {
       _stageTimer?.cancel();
       if (mounted) setState(() => _analyzing = false);
+    }
+  }
+
+  /// Bir market grubunu token harcayarak açar (onay diyaloğuyla).
+  Future<void> _unlockGroup(MarketGroupInfo g, int? tokensLeft) async {
+    final left = ref.read(authProvider).user?.tokensLeft ?? tokensLeft ?? 0;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: Text('${g.name} grubunu aç',
+            style: AppText.sans(size: 15, weight: FontWeight.w800)),
+        content: Text(
+          'Bu grubu açmak ${g.cost} token harcar (kalan: $left).\n'
+          'Açılan grup bu maç için tekrar ücret alınmadan görüntülenir.\n'
+          'Token hakkınız her gün yenilenir.',
+          style: AppText.sans(size: 12.5, color: AppColors.textSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Vazgeç'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('${g.cost} token harca'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await ref
+          .read(apiClientProvider)
+          .post('/matches/${widget.matchId}/unlock-group', data: {'group': g.key});
+      ref.invalidate(matchDetailProvider(widget.matchId));
+      ref.read(authProvider.notifier).refreshMe();
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message)));
+      if (e.code == 'insufficient_tokens') {
+        showPaywall(context);
+      }
     }
   }
 
@@ -111,7 +165,7 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
                     ..._outcomeCards(d.odds, impliedMs, analysis, home, away),
                     if (analysis == null && !_analyzing) ...[
                       const SizedBox(height: 12),
-                      _analyzeCta(tier),
+                      _analyzeCta(tier, d, isLive),
                     ],
                     if (_analyzing) ...[
                       const SizedBox(height: 12),
@@ -124,8 +178,8 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
                         const SizedBox(height: 10),
                         _reasonsCard(analysis),
                       ],
-                      ..._valueSection(analysis, tier),
-                      ..._marketAnalysesSection(analysis, tier),
+                      ..._valueSection(analysis, tier, d.unlockedGroupKeys),
+                      ..._marketAnalysesSection(analysis, tier, d.unlockedGroupKeys),
                     ],
                     if (isLive && stats.live.isNotEmpty) ...[
                       const SizedBox(height: 18),
@@ -157,9 +211,13 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
                                 name: s.name, home: s.home, away: s.away, max: s.max),
                           )),
                     ],
-                    if (d.markets.isNotEmpty) ...[
+                    if (d.marketGroups.any((g) => g.count > 0)) ...[
                       const SizedBox(height: 18),
-                      _GroupedMarkets(markets: d.markets, tier: tier),
+                      _GroupedMarkets(
+                        markets: d.markets,
+                        groups: d.marketGroups,
+                        onUnlock: (g) => _unlockGroup(g, d.tokensLeft),
+                      ),
                     ],
                     const SizedBox(height: 18),
                     Text(
@@ -357,10 +415,35 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
         TextSpan(text: v, style: AppText.mono(size: 10.5)),
       ]));
 
-  Widget _analyzeCta(int tier) {
-    final note = tier >= 3
-        ? 'Altın paket: sınırsız analiz'
-        : '${tierNames[tier]} paket: günlük analiz hakkınızla';
+  Widget _analyzeCta(int tier, MatchDetail d, bool isLive) {
+    // Canlı maç AI tahminleri yalnızca Altın pakette
+    if (isLive && tier < 3) {
+      return Column(
+        children: [
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: () => showPaywall(context, highlightTier: 3),
+              icon: const Icon(Icons.lock_outline, size: 18),
+              label: const Text('Canlı AI Tahminleri — Altın Paket'),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Canlı maçlarda AI tahminleri Altın pakete özeldir.',
+            style: AppText.sans(
+                size: 10, weight: FontWeight.w500, color: AppColors.textMuted),
+          ),
+        ],
+      );
+    }
+    final cost = isLive
+        ? (d.tokenCosts['live_analysis'] ?? 40)
+        : (d.tokenCosts['analysis'] ?? 25);
+    final left = ref.watch(authProvider).user?.tokensLeft ?? d.tokensLeft ?? 0;
+    final label = d.analysisExists
+        ? 'Analizi Aç ($cost token)'
+        : 'Model Analizini Getir ($cost token)';
     return Column(
       children: [
         SizedBox(
@@ -368,12 +451,12 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
           child: ElevatedButton.icon(
             onPressed: _runAnalysis,
             icon: const Icon(Icons.auto_awesome, size: 18),
-            label: const Text('Model Analizini Getir'),
+            label: Text(label),
           ),
         ),
         const SizedBox(height: 6),
         Text(
-          note,
+          'Kalan token: $left / gün · token hakkı her gün yenilenir',
           style: AppText.sans(
               size: 10, weight: FontWeight.w500, color: AppColors.textMuted),
         ),
@@ -512,13 +595,16 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
         : m.market;
   }
 
-  /// Analiz kaydının kilitli olup olmadığı (grubunun kademesi > kullanıcı kademesi).
-  bool _maLocked(MarketAnalysis m, int tier) =>
-      marketGroupDef(analysisGroupKeyFor(m.market)).tier > tier;
+  /// Analiz kaydı kilitli mi? Grubu token ile açıldıysa VEYA paket kademesi
+  /// grubu kapsıyorsa görünür.
+  bool _maLocked(MarketAnalysis m, int tier, Set<String> unlockedKeys) {
+    final key = analysisGroupKeyFor(m.market);
+    if (unlockedKeys.contains(key)) return false;
+    return marketGroupDef(key).tier > tier;
+  }
 
-  /// Kilitli analiz sayısını gösteren, paywall açan ipucu kartı.
+  /// Kilitli analiz sayısını gösteren ipucu kartı (token/paket ile açılır).
   Widget _lockedHint(int count, int tier) {
-    // bir üst paket önerisi
     final next = (tier + 1).clamp(1, 3).toInt();
     return GestureDetector(
       onTap: () => showPaywall(context, highlightTier: next),
@@ -536,7 +622,7 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
             const SizedBox(width: 10),
             Expanded(
               child: Text(
-                '+$count market analizi daha var — üst paketlerle açılır.',
+                '+$count market analizi daha var — ilgili market grubunu token ile açın veya paketinizi yükseltin.',
                 style: AppText.sans(
                     size: 12, weight: FontWeight.w700, color: const Color(0xFFE7CE8B)),
               ),
@@ -551,12 +637,13 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
   }
 
   /// "Değer fırsatları": modelin orandan yüksek olasılık verdiği seçimler.
-  List<Widget> _valueSection(Analysis a, int tier) {
+  List<Widget> _valueSection(Analysis a, int tier, Set<String> unlockedKeys) {
     final all = a.markets.where((m) => m.degerVarMi).toList()
       ..sort((x, y) => (y.degerFarki ?? 0).compareTo(x.degerFarki ?? 0));
     if (all.isEmpty) return const [];
-    final visible = all.where((m) => !_maLocked(m, tier)).take(5).toList();
-    final lockedCount = all.length - all.where((m) => !_maLocked(m, tier)).length;
+    final open = all.where((m) => !_maLocked(m, tier, unlockedKeys)).toList();
+    final visible = open.take(5).toList();
+    final lockedCount = all.length - open.length;
     return [
       const SizedBox(height: 18),
       _sectionHead('Değer fırsatları', trailing: 'model > oranın iması'),
@@ -566,13 +653,15 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
     ];
   }
 
-  /// Market analizleri — kullanıcının paketinin desteklediği gruplar görünür.
-  List<Widget> _marketAnalysesSection(Analysis a, int tier) {
+  /// Market analizleri — açılan gruplar + paketin kapsadığı gruplar görünür.
+  List<Widget> _marketAnalysesSection(
+      Analysis a, int tier, Set<String> unlockedKeys) {
     final rest = a.markets
         .where((m) => m.olasilik != null && !m.degerVarMi)
         .toList();
     if (rest.isEmpty) return const [];
-    final visible = rest.where((m) => !_maLocked(m, tier)).toList();
+    final visible =
+        rest.where((m) => !_maLocked(m, tier, unlockedKeys)).toList();
     final lockedCount = rest.length - visible.length;
     return [
       const SizedBox(height: 18),
@@ -797,11 +886,17 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
   }
 }
 
-/// Marketler, gruplara ayrılmış ve pakete göre kilitli/açık gösterilir.
+/// Marketler, gruplara ayrılmış ve TOKEN kilidiyle gösterilir.
+/// Kilitli grup başlığında token maliyeti yazar; dokununca [onUnlock] çağrılır.
 class _GroupedMarkets extends StatefulWidget {
-  final List markets; // List<BetMarket>
-  final int tier;
-  const _GroupedMarkets({required this.markets, required this.tier});
+  final List<BetMarket> markets; // yalnızca açılmış grupların marketleri
+  final List<MarketGroupInfo> groups;
+  final void Function(MarketGroupInfo) onUnlock;
+  const _GroupedMarkets({
+    required this.markets,
+    required this.groups,
+    required this.onUnlock,
+  });
   @override
   State<_GroupedMarkets> createState() => _GroupedMarketsState();
 }
@@ -811,10 +906,10 @@ class _GroupedMarketsState extends State<_GroupedMarkets> {
 
   @override
   Widget build(BuildContext context) {
-    // Marketleri gruplara dağıt (tanım sırası korunur)
-    final byGroup = <String, List>{};
+    // Açık marketleri gruplarına dağıt (sunucu 'grup' alanını gönderir)
+    final byGroup = <String, List<BetMarket>>{};
     for (final m in widget.markets) {
-      final key = marketGroupKeyFor(m.name as String);
+      final key = m.group ?? marketGroupKeyFor(m.name);
       (byGroup[key] ??= []).add(m);
     }
 
@@ -822,14 +917,12 @@ class _GroupedMarketsState extends State<_GroupedMarkets> {
       Text('MARKET GRUPLARI', style: AppText.section()),
       const SizedBox(height: 8),
     ];
-    for (final def in marketGroupDefs) {
-      final items = byGroup[def.key];
-      if (items == null || items.isEmpty) continue;
-      final unlocked = widget.tier >= def.tier;
-      final isOpen = unlocked && _open.contains(def.key);
-      children.add(_groupHeader(def, items.length, unlocked, isOpen));
+    for (final g in widget.groups) {
+      if (g.count == 0) continue;
+      final isOpen = g.unlocked && _open.contains(g.key);
+      children.add(_groupHeader(g, isOpen));
       if (isOpen) {
-        children.addAll(items.map((m) => _marketCard(m)));
+        children.addAll((byGroup[g.key] ?? []).map((m) => _marketCard(m)));
       }
       children.add(const SizedBox(height: 6));
     }
@@ -839,15 +932,15 @@ class _GroupedMarketsState extends State<_GroupedMarkets> {
     );
   }
 
-  Widget _groupHeader(MarketGroupDef def, int count, bool unlocked, bool isOpen) {
+  Widget _groupHeader(MarketGroupInfo g, bool isOpen) {
+    final unlocked = g.unlocked;
     return GestureDetector(
       onTap: () {
         if (!unlocked) {
-          showPaywall(context, highlightTier: def.tier);
+          widget.onUnlock(g);
           return;
         }
-        setState(() =>
-            isOpen ? _open.remove(def.key) : _open.add(def.key));
+        setState(() => isOpen ? _open.remove(g.key) : _open.add(g.key));
       },
       child: Container(
         margin: const EdgeInsets.only(bottom: 6),
@@ -871,7 +964,7 @@ class _GroupedMarketsState extends State<_GroupedMarkets> {
             ),
             const SizedBox(width: 9),
             Expanded(
-              child: Text('${def.name} ($count)',
+              child: Text('${g.name} (${g.count})',
                   style: AppText.sans(
                       size: 13,
                       weight: FontWeight.w700,
@@ -880,7 +973,7 @@ class _GroupedMarketsState extends State<_GroupedMarkets> {
                           : const Color(0xFFE7CE8B))),
             ),
             if (!unlocked)
-              Text('${tierNames[def.tier]} paketiyle',
+              Text('${g.cost} token ile aç',
                   style: AppText.sans(
                       size: 10.5, weight: FontWeight.w800, color: AppColors.gold)),
           ],
