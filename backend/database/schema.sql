@@ -211,6 +211,29 @@ CREATE TABLE IF NOT EXISTS user_unlocks (
     CONSTRAINT fk_unlock_match FOREIGN KEY (match_id) REFERENCES matches(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- ---------- AI prompt/yanıt kayıtları ----------
+-- Her analiz çağrısında LLM'e gönderilen prompt ve dönen yanıt burada tutulur.
+CREATE TABLE IF NOT EXISTS ai_prompt_logs (
+    id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    analysis_type VARCHAR(20) NOT NULL,           -- 'full' (tüm maç) | 'market' (tek market)
+    match_id      BIGINT UNSIGNED DEFAULT NULL,
+    market_key    VARCHAR(64) DEFAULT NULL,
+    analysis_id   BIGINT UNSIGNED DEFAULT NULL,    -- analyses.id veya market_analyses.id
+    provider      VARCHAR(40) DEFAULT NULL,        -- gemini, openai, custom
+    model_name    VARCHAR(120) DEFAULT NULL,
+    system_prompt LONGTEXT,                        -- LLM'e gönderilen sistem promptu
+    user_prompt   LONGTEXT,                        -- LLM'e gönderilen kullanıcı promptu
+    response_text LONGTEXT,                        -- LLM'den dönen ham yanıt
+    token_usage   INT UNSIGNED DEFAULT NULL,
+    attempt       TINYINT UNSIGNED NOT NULL DEFAULT 1,  -- 1 ilk çağrı, 2 JSON düzeltme denemesi
+    web_search    TINYINT(1) NOT NULL DEFAULT 0,
+    created_by    BIGINT UNSIGNED DEFAULT NULL,
+    created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_apl_match (match_id, created_at),
+    KEY idx_apl_type (analysis_type, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- ---------- Ayarlar (key/value) ----------
 CREATE TABLE IF NOT EXISTS settings (
     skey        VARCHAR(80) NOT NULL,

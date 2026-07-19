@@ -69,10 +69,13 @@ class AnalysisEngine
             $userPrompt = $this->buildUserPrompt($match, $odds, $stats);
 
             $result = $client->complete($systemPrompt, $userPrompt);
+            $this->recordPromptLog('full', $matchId, null, $analysisId, $provider, $systemPrompt, $userPrompt, $result, 1, false, $userId);
             $parsed = $this->parseResult($result['text']);
             if ($parsed === null) {
                 // Bir kez daha dene (JSON düzeltme talebiyle)
-                $result = $client->complete($systemPrompt, $userPrompt . "\n\nSADECE geçerli JSON döndür, açıklama ekleme.");
+                $retryPrompt = $userPrompt . "\n\nSADECE geçerli JSON döndür, açıklama ekleme.";
+                $result = $client->complete($systemPrompt, $retryPrompt);
+                $this->recordPromptLog('full', $matchId, null, $analysisId, $provider, $systemPrompt, $retryPrompt, $result, 2, false, $userId);
                 $parsed = $this->parseResult($result['text']);
             }
             if ($parsed === null) {
@@ -179,9 +182,12 @@ class AnalysisEngine
             $userPrompt = $this->buildMarketPrompt($match, $def, $stats, $web);
 
             $result = $client->complete($systemPrompt, $userPrompt, ['web_search' => $web]);
+            $this->recordPromptLog('market', $matchId, $marketKey, $rowId, $provider, $systemPrompt, $userPrompt, $result, 1, $web, $userId);
             $parsed = $this->parseMarketResult($result['text']);
             if ($parsed === null) {
-                $result = $client->complete($systemPrompt, $userPrompt . "\n\nSADECE geçerli JSON döndür, açıklama ekleme.", ['web_search' => $web]);
+                $retryPrompt = $userPrompt . "\n\nSADECE geçerli JSON döndür, açıklama ekleme.";
+                $result = $client->complete($systemPrompt, $retryPrompt, ['web_search' => $web]);
+                $this->recordPromptLog('market', $matchId, $marketKey, $rowId, $provider, $systemPrompt, $retryPrompt, $result, 2, $web, $userId);
                 $parsed = $this->parseMarketResult($result['text']);
             }
             if ($parsed === null) {
@@ -564,5 +570,53 @@ class AnalysisEngine
             $out[$r['type']] = json_decode($r['data'], true);
         }
         return $out;
+    }
+
+    /**
+     * Bir AI analiz çağrısını (gönderilen prompt + dönen yanıt) ai_prompt_logs
+     * tablosuna kaydeder. Loglama hiçbir koşulda analizi bozmamalı; bu yüzden
+     * tüm hatalar sessizce yutulur.
+     *
+     * @param string   $type       'full' | 'market'
+     * @param array    $result      LLM istemcisinin döndürdüğü ['text','model','tokens']
+     */
+    private function recordPromptLog(
+        string $type,
+        ?int $matchId,
+        ?string $marketKey,
+        ?int $analysisId,
+        string $provider,
+        string $systemPrompt,
+        string $userPrompt,
+        array $result,
+        int $attempt,
+        bool $webSearch,
+        ?int $userId
+    ): void {
+        try {
+            Database::insert(
+                'INSERT INTO ai_prompt_logs
+                    (analysis_type, match_id, market_key, analysis_id, provider, model_name,
+                     system_prompt, user_prompt, response_text, token_usage, attempt, web_search, created_by)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                [
+                    $type,
+                    $matchId,
+                    $marketKey,
+                    $analysisId,
+                    $provider,
+                    $result['model'] ?? null,
+                    $systemPrompt,
+                    $userPrompt,
+                    $result['text'] ?? null,
+                    $result['tokens'] ?? null,
+                    $attempt,
+                    $webSearch ? 1 : 0,
+                    $userId,
+                ]
+            );
+        } catch (\Throwable $e) {
+            // Loglama başarısız olsa bile analiz akışı etkilenmez.
+        }
     }
 }
