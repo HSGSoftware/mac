@@ -16,11 +16,14 @@ class AnalysisController
     /**
      * POST /matches/{id}/analyze-market  {market_key}
      *
-     * KREDİ sistemi: her market AYRI analiz edilir ve AYRI kredi tüketir.
-     * - Maç öncesi: market başına bir kez kredi düşer; tekrar görüntüleme ücretsiz.
-     * - Canlı maç: yalnızca Altın paket; daha yüksek kredi; analiz
-     *   live_analysis_ttl saniye tazedir, süre dolunca yeni istek yeni kredi ister.
-     * - AI üretimi başarısız olursa kredi DÜŞMEZ.
+     * Akış:
+     * - Market analizi HAZIRSA (market_analyses.done + taze): hemen döner.
+     *   Ana marketler (MS/Maç Sonucu) ÜCRETSİZ; diğerleri market başına kredi düşer
+     *   (bir kez; tekrar görüntüleme ücretsiz). AI üretimi başarısızsa kredi düşmez.
+     * - HAZIR DEĞİLSE: kullanıcı beklemez. Maç "Analizlerim"e eklenir, yanıt hemen
+     *   "hazırlanıyor" olarak döner, bağlantı kapatılır ve ARKA PLANDA maçın TÜM
+     *   marketleri tek AI çağrısıyla üretilir. Kredi bu aşamada DÜŞMEZ (market
+     *   açıldığında düşer). Sonuç hazır olunca uygulama Analizlerim'de gösterir.
      */
     public function analyzeMarket(Request $req): void
     {
@@ -49,65 +52,128 @@ class AnalysisController
         }
 
         $engine = new AnalysisEngine();
-        $cost = Credits::marketCost($isLive);
 
-        // Kullanıcı bu marketi daha önce açtı mı? (canlıda açılış TTL süresince geçerli)
-        $unlockAt = Credits::unlockAt((int) $user['id'], $matchId, $marketKey);
-        $entitled = $unlockAt !== null
-            && (!$isLive || (time() - strtotime($unlockAt)) <= Credits::liveTtl());
-
-        // Analiz zaten hazır mı? (önceden yüklenmiş/önbellekli)
+        // Bu market hazır & taze mi?
         $cachedRow = Database::fetch(
-            'SELECT status, created_at FROM market_analyses WHERE match_id = ? AND market_key = ?',
+            'SELECT * FROM market_analyses WHERE match_id = ? AND market_key = ?',
             [$matchId, $marketKey]
         );
-        $wasCached = $cachedRow && $cachedRow['status'] === 'done'
+        $ready = $cachedRow && $cachedRow['status'] === 'done'
             && $engine->isMarketAnalysisFresh($cachedRow, $isLive);
 
-        // Manuel mod: AI sağlayıcısına hiç istek atılmaz; yalnızca admin panelden
-        // kaydedilmiş hazır analizler sunulur. Hazır analiz yoksa kredi düşmeden
-        // "hazırlanıyor" yanıtı dönülür.
-        if (!$wasCached && (string) Settings::get('manual_analysis_mode', '1') === '1') {
-            Response::error(
-                'analysis_preparing',
-                'Bu marketin AI analizi şu anda hazırlanıyor. Lütfen kısa süre sonra tekrar deneyin.',
-                503
-            );
-        }
+        // Grup + maliyet. Ana (MS) marketler her zaman ÜCRETSİZ.
+        $group = $engine->groupOfMarket($matchId, $marketKey);
+        $cost = Credits::marketCostForGroup($group, $isLive);
 
+        // Kullanıcı bu marketi daha önce açtı mı? (canlıda TTL süresince geçerli)
+        $unlockAt = Credits::unlockAt((int) $user['id'], $matchId, $marketKey);
+        $entitled = $cost === 0
+            || ($unlockAt !== null && (!$isLive || (time() - strtotime($unlockAt)) <= Credits::liveTtl()));
         $remaining = Credits::remaining($user);
-        if (!$entitled && $remaining < $cost) {
-            Response::error(
-                'insufficient_credits',
-                "Kredi hakkınız yetersiz (gereken: $cost, kalan: $remaining). Krediler her gün yenilenir; daha yüksek paketle günlük krediniz artar.",
-                429,
-                ['cost' => $cost, 'remaining' => $remaining, 'tier' => $tier]
-            );
+
+        // ---- HAZIR: hemen döndür (gerekirse kredi düş) ----
+        if ($ready) {
+            if (!$entitled && $remaining < $cost) {
+                Response::error(
+                    'insufficient_credits',
+                    "Kredi hakkınız yetersiz (gereken: $cost, kalan: $remaining). Krediler her gün yenilenir; daha yüksek paketle günlük krediniz artar.",
+                    429,
+                    ['cost' => $cost, 'remaining' => $remaining, 'tier' => $tier]
+                );
+            }
+            if (!$entitled) {
+                Credits::spend($user, $cost);
+                Credits::recordUnlock((int) $user['id'], $matchId, $marketKey, $cost);
+                $remaining = max(0, $remaining - $cost);
+            }
+            Response::ok([
+                'analysis' => self::presentMarketAnalysis($cachedRow),
+                'credits_left' => $remaining,
+            ]);
+            return;
         }
 
+        // ---- HAZIR DEĞİL: kullanıcı beklemesin ----
+        // Maçı "Analizlerim"e ekle ki hazırlanırken orada görünsün.
+        self::touchHistory((int) $user['id'], $matchId);
+
+        // Aynı maç için son 3 dk içinde üretim başladıysa tekrar tetikleme.
+        $pendingActive = false;
+        $anyPending = Database::fetch(
+            "SELECT created_at FROM market_analyses
+             WHERE match_id = ? AND status = 'pending'
+             ORDER BY created_at DESC LIMIT 1",
+            [$matchId]
+        );
+        if ($anyPending && (time() - strtotime($anyPending['created_at'])) < 180) {
+            $pendingActive = true;
+        }
+
+        // Yanıtı HEMEN ver ve bağlantıyı kapat; analiz arka planda sürsün.
+        self::respondPreparing($matchId, $remaining);
+
+        if ($pendingActive) {
+            return; // başka bir istek zaten üretiyor
+        }
+
+        @ignore_user_abort(true);
+        @set_time_limit(180);
         try {
-            $row = $engine->analyzeMarket($matchId, $marketKey, (int) $user['id']);
+            $engine->analyzeAllMarkets($matchId, (int) $user['id']);
         } catch (\Throwable $e) {
-            // Üretim başarısızsa kredi DÜŞMEZ
-            Response::error('analysis_failed', 'Analiz üretilemedi: ' . $e->getMessage(), 502);
+            // Sessiz: ilgili satırlar 'failed' işaretlendi; kullanıcı tekrar deneyince yeniden üretilir.
         }
+        exit;
+    }
 
-        // Hazır (önceden yüklenmiş) analiz ilk kez açılıyorsa kısa bir üretim
-        // beklemesi uygula; kullanıcı deneyimi gerçek AI çağrısıyla tutarlı kalır.
-        if ($wasCached && !$entitled) {
-            usleep(random_int(1200, 2400) * 1000);
+    /** Maçı kullanıcının "Analizlerim" geçmişine ekler/tazeler. */
+    private static function touchHistory(int $userId, int $matchId): void
+    {
+        try {
+            Database::execute(
+                "INSERT INTO user_analysis_history (user_id, match_id, first_viewed_at, last_viewed_at)
+                 VALUES (?, ?, NOW(), NOW())
+                 ON DUPLICATE KEY UPDATE last_viewed_at = NOW()",
+                [$userId, $matchId]
+            );
+        } catch (\Throwable $e) {
+            // geçmiş tablosu yoksa akışı bozma
         }
+    }
 
-        if (!$entitled) {
-            Credits::spend($user, $cost);
-            Credits::recordUnlock((int) $user['id'], $matchId, $marketKey, $cost);
-            $remaining = max(0, $remaining - $cost);
+    /**
+     * "Analiz hazırlanıyor" yanıtını gönderir ve (mümkünse) bağlantıyı kapatır
+     * ki arka plan işi kullanıcıyı bekletmesin. exit ÇAĞIRMAZ — çağıran devam eder.
+     */
+    private static function respondPreparing(int $matchId, int $remaining): void
+    {
+        $msg = 'Yapay zeka bu maçın tüm marketlerini analiz ediyor; son istatistikler ve '
+            . 'oranlar işleniyor. Analiziniz birazdan "Analizlerim" bölümünde hazır olacak.';
+        $body = json_encode([
+            'success' => true,
+            'message' => $msg,
+            'data' => [
+                'preparing' => true,
+                'match_id' => $matchId,
+                'credits_left' => $remaining,
+                'message' => $msg,
+            ],
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        if (!headers_sent()) {
+            http_response_code(202);
+            header('Content-Type: application/json; charset=utf-8');
+            header('Content-Length: ' . strlen($body));
+            header('Connection: close');
         }
+        echo $body;
 
-        Response::ok([
-            'analysis' => self::presentMarketAnalysis($row),
-            'credits_left' => $remaining,
-        ]);
+        if (function_exists('fastcgi_finish_request')) {
+            fastcgi_finish_request();
+        } else {
+            @ob_end_flush();
+            @flush();
+        }
     }
 
     /** market_analyses satırını istemci formatına çevirir. */

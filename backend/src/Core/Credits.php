@@ -52,6 +52,27 @@ class Credits
             : max(0, (int) Settings::get('credit_cost_market', 1));
     }
 
+    /** Grup başına varsayılan kredi maliyeti (ana/MS her zaman ücretsiz). */
+    private const GROUP_COST_DEFAULTS = ['ana' => 0, 'gol' => 1, 'handikap' => 1, 'ozel' => 1];
+
+    /**
+     * Grup başına market analizi kredi maliyeti. Ana (MS/Maç Sonucu) marketler
+     * her zaman ÜCRETSİZ. Diğer grupların maliyeti admin panelden ayarlanabilir
+     * (credit_cost_group_<grup>). Canlı maçta en az live maliyeti uygulanır.
+     */
+    public static function marketCostForGroup(string $group, bool $live = false): int
+    {
+        if ($group === 'ana') {
+            return 0;
+        }
+        $def = self::GROUP_COST_DEFAULTS[$group] ?? 1;
+        $base = max(0, (int) Settings::get('credit_cost_group_' . $group, $def));
+        if ($live) {
+            return max($base, (int) Settings::get('credit_cost_live_market', 2));
+        }
+        return $base;
+    }
+
     /** Canlı analizin tazelik süresi (sn): bu süre içinde önbellek geçerli. */
     public static function liveTtl(): int
     {
@@ -106,12 +127,18 @@ class Credits
         return $custom !== '' ? $custom : $originalName;
     }
 
-    /** İstemciye gönderilen maliyet tablosu. */
+    /** İstemciye gönderilen maliyet tablosu (grup başına). */
     public static function costs(): array
     {
         return [
             'market' => self::marketCost(false),
             'live_market' => self::marketCost(true),
+            'groups' => [
+                'ana' => 0,
+                'gol' => self::marketCostForGroup('gol'),
+                'handikap' => self::marketCostForGroup('handikap'),
+                'ozel' => self::marketCostForGroup('ozel'),
+            ],
         ];
     }
 

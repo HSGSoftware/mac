@@ -39,6 +39,25 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
         '/matches/${widget.matchId}/analyze-market',
         data: {'market_key': marketKey},
       );
+      // Analiz hazır değilse: arka planda üretiliyor. Kullanıcı beklemez;
+      // "Analizlerim"e düşer, hazır olunca orada görünür.
+      if (data is Map && data['preparing'] == true) {
+        if (mounted) {
+          final msg = data['message']?.toString() ??
+              'Analiz hazırlanıyor, birazdan "Analizlerim" bölümünde olacak.';
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(msg),
+              duration: const Duration(seconds: 6),
+            ),
+          );
+        }
+        // Bir süre sonra maç detayını tazele ki hazır sonuç görünsün.
+        Future.delayed(const Duration(seconds: 12), () {
+          if (mounted) ref.invalidate(matchDetailProvider(widget.matchId));
+        });
+        return;
+      }
       final result =
           MarketAiAnalysis.fromJson(Map<String, dynamic>.from(data['analysis']));
       if (mounted) setState(() => _results[marketKey] = result);
@@ -738,12 +757,19 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
           Wrap(
             spacing: 7,
             runSpacing: 7,
-            children: m.outcomes
-                .map<Widget>((o) => ConstrainedBox(
-                      constraints: const BoxConstraints(minWidth: 74),
-                      child: OddsBox(label: o.label, value: o.odd, compact: true),
-                    ))
-                .toList(),
+            children: m.outcomes.map<Widget>((o) {
+              final opt = result?.optionFor(o.label);
+              return ConstrainedBox(
+                constraints: const BoxConstraints(minWidth: 74),
+                child: OddsBox(
+                  label: o.label,
+                  value: o.odd,
+                  compact: true,
+                  aiPct: opt?.olasilik,
+                  recommended: result != null && result.tavsiye == o.label,
+                ),
+              );
+            }).toList(),
           ),
           if (result != null) ...[
             const SizedBox(height: 10),

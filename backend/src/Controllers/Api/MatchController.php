@@ -204,20 +204,29 @@ class MatchController
             }
         }
 
-        // Kullanıcının kredi harcayarak açtığı market analizleri
+        // Gösterilecek analizler:
+        //  - Ana (MS/Maç Sonucu) marketler ÜCRETSİZ: hazırsa her zaman gösterilir.
+        //  - Diğer marketler: kullanıcının kredi ile açtıkları.
         $marketAnalyses = [];
+        $keys = ['MS'];
+        foreach ($visibleMarkets as $it) {
+            if (($it['grup'] ?? '') === 'ana' && !empty($it['key'])) {
+                $keys[] = $it['key'];
+            }
+        }
         if ($viewer) {
-            $unlockedKeys = Credits::unlockedMarkets((int) $viewer['id'], $id);
-            if ($unlockedKeys) {
-                $place = implode(',', array_fill(0, count($unlockedKeys), '?'));
-                $rows = Database::fetchAll(
-                    "SELECT * FROM market_analyses
-                     WHERE match_id = ? AND status='done' AND market_key IN ($place)",
-                    array_merge([$id], $unlockedKeys)
-                );
-                foreach ($rows as $r) {
-                    $marketAnalyses[] = AnalysisController::presentMarketAnalysis($r);
-                }
+            $keys = array_merge($keys, Credits::unlockedMarkets((int) $viewer['id'], $id));
+        }
+        $keys = array_values(array_unique(array_filter($keys)));
+        if ($keys) {
+            $place = implode(',', array_fill(0, count($keys), '?'));
+            $rows = Database::fetchAll(
+                "SELECT * FROM market_analyses
+                 WHERE match_id = ? AND status='done' AND market_key IN ($place)",
+                array_merge([$id], $keys)
+            );
+            foreach ($rows as $r) {
+                $marketAnalyses[] = AnalysisController::presentMarketAnalysis($r);
             }
         }
 

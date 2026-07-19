@@ -619,4 +619,247 @@ class AnalysisEngine
             // Loglama başarısız olsa bile analiz akışı etkilenmez.
         }
     }
+
+    // ================== TOPLU ANALİZ (tek AI çağrısı, tüm marketler) ==================
+
+    /** Maçın tüm market tanımları: MS + scraped marketler. [market_key => def] */
+    public function allMarketDefs(int $matchId): array
+    {
+        $defs = [];
+        $ms = $this->resolveMarket($matchId, 'MS');
+        if ($ms) {
+            $defs['MS'] = $ms;
+        }
+        $stats = $this->stats($matchId);
+        foreach (($stats['markets'] ?? []) as $mk) {
+            if (!is_array($mk)) {
+                continue;
+            }
+            $key = Credits::marketKeyFor((string) ($mk['ad'] ?? ''), $mk['sov'] ?? null);
+            if (isset($defs[$key])) {
+                continue;
+            }
+            $def = $this->resolveMarket($matchId, $key);
+            if ($def) {
+                $defs[$def['key']] = $def;
+            }
+        }
+        return $defs;
+    }
+
+    /** Bir marketin grup anahtarı ('ana'/'gol'/'handikap'/'ozel'). MS → ana. */
+    public function groupOfMarket(int $matchId, string $marketKey): string
+    {
+        if ($marketKey === 'MS') {
+            return 'ana';
+        }
+        $def = $this->resolveMarket($matchId, $marketKey);
+        return $def['group'] ?? 'ozel';
+    }
+
+    /**
+     * Maçın TÜM marketlerini TEK AI çağrısıyla analiz eder ve her marketi
+     * market_analyses tablosuna 'done' olarak yazar (hız + maliyet için).
+     * @return int üretilen (done) market sayısı
+     */
+    public function analyzeAllMarkets(int $matchId, ?int $userId = null): int
+    {
+        $match = Database::fetch(
+            "SELECT m.*, ht.name AS home_name, at.name AS away_name, l.name AS league_name
+             FROM matches m
+             LEFT JOIN teams ht ON ht.id = m.home_team_id
+             LEFT JOIN teams at ON at.id = m.away_team_id
+             LEFT JOIN leagues l ON l.id = m.league_id
+             WHERE m.id = ?",
+            [$matchId]
+        );
+        if (!$match) {
+            throw new \RuntimeException('Maç bulunamadı.');
+        }
+        $isLive = ($match['status'] ?? '') === 'live';
+
+        // İstatistik eksikse anlık çek
+        $statsCount = (int) (Database::fetch('SELECT COUNT(*) c FROM match_stats WHERE match_id = ?', [$matchId])['c'] ?? 0);
+        if ($statsCount === 0) {
+            try {
+                (new MackolikScraper())->fetchMatchStats($matchId);
+            } catch (\Throwable $e) {
+                // veri yoksa mevcutla devam
+            }
+        }
+
+        $defs = $this->allMarketDefs($matchId);
+        if (!$defs) {
+            return 0;
+        }
+        $stats = $this->stats($matchId);
+        $provider = LlmFactory::providerName();
+
+        // Tüm marketleri 'pending' işaretle (mevcut done olanları koru)
+        foreach ($defs as $def) {
+            Database::execute(
+                "INSERT INTO market_analyses (match_id, market_key, market_label, is_live, status, provider, created_by, created_at)
+                 VALUES (?, ?, ?, ?, 'pending', ?, ?, NOW())
+                 ON DUPLICATE KEY UPDATE market_label=VALUES(market_label), is_live=VALUES(is_live),
+                     provider=VALUES(provider), status=IF(status='done','done','pending'),
+                     created_by=VALUES(created_by), error_message=NULL",
+                [$matchId, $def['key'], $def['label'], $isLive ? 1 : 0, $provider, $userId]
+            );
+        }
+
+        try {
+            $client = LlmFactory::make();
+            $web = Credits::webSearchEnabled();
+            $systemPrompt = $this->multiSystemPrompt($web);
+            $userPrompt = $this->buildMultiPrompt($match, $defs, $stats, $web, $isLive);
+
+            $result = $client->complete($systemPrompt, $userPrompt, ['web_search' => $web]);
+            $this->recordPromptLog('match', $matchId, null, null, $provider, $systemPrompt, $userPrompt, $result, 1, $web, $userId);
+            $byKey = $this->parseMultiResult($result['text']);
+            if ($byKey === null) {
+                $retry = $userPrompt . "\n\nSADECE geçerli JSON döndür, açıklama ekleme.";
+                $result = $client->complete($systemPrompt, $retry, ['web_search' => $web]);
+                $this->recordPromptLog('match', $matchId, null, null, $provider, $systemPrompt, $retry, $result, 2, $web, $userId);
+                $byKey = $this->parseMultiResult($result['text']);
+            }
+            if ($byKey === null) {
+                throw new \RuntimeException('AI yanıtı geçerli JSON değil.');
+            }
+
+            $model = $result['model'];
+            $tokens = $result['tokens'];
+            $done = 0;
+            foreach ($defs as $key => $def) {
+                $mkIn = $byKey[$key] ?? null;
+                if (!is_array($mkIn)) {
+                    Database::execute(
+                        "UPDATE market_analyses SET status='failed', error_message='AI bu marketi döndürmedi' WHERE match_id=? AND market_key=?",
+                        [$matchId, $key]
+                    );
+                    continue;
+                }
+                $mkIn['secenekler'] = $mkIn['secenekler'] ?? [];
+                $parsed = $this->annotateMarketResult($mkIn, $def);
+                Database::execute(
+                    "UPDATE market_analyses SET status='done', model_name=?, result=?, token_usage=?, error_message=NULL, created_at=NOW()
+                     WHERE match_id=? AND market_key=?",
+                    [$model, json_encode($parsed, JSON_UNESCAPED_UNICODE), $tokens, $matchId, $key]
+                );
+                $done++;
+            }
+            return $done;
+        } catch (\Throwable $e) {
+            Database::execute(
+                "UPDATE market_analyses SET status='failed', error_message=? WHERE match_id=? AND status='pending'",
+                [mb_substr($e->getMessage(), 0, 500), $matchId]
+            );
+            throw $e;
+        }
+    }
+
+    /** Çoklu-market yanıtını çözümle: {"marketler":[{market_key,...}]} → [key => data] */
+    private function parseMultiResult(string $text): ?array
+    {
+        $text = trim($text);
+        $text = preg_replace('/^```(?:json)?\s*/i', '', $text);
+        $text = preg_replace('/\s*```$/', '', $text);
+        $data = json_decode($text, true);
+        if (!is_array($data) && preg_match('/\{.*\}/s', $text, $m)) {
+            $data = json_decode($m[0], true);
+        }
+        if (!is_array($data)) {
+            return null;
+        }
+        $markets = $data['marketler'] ?? $data['markets'] ?? ($data['analizler'][0]['marketler'] ?? null);
+        if (!is_array($markets)) {
+            return null;
+        }
+        $byKey = [];
+        foreach ($markets as $mk) {
+            if (is_array($mk) && !empty($mk['market_key'])) {
+                $byKey[(string) $mk['market_key']] = $mk;
+            }
+        }
+        return $byKey ?: null;
+    }
+
+    private function multiSystemPrompt(bool $webSearch): string
+    {
+        $research = $webSearch
+            ? "İNTERNET ARAŞTIRMASI: Arama aracıyla bu maç ve iki takım hakkında GÜNCEL bilgileri araştır "
+              . "(sakat/cezalı, muhtemel 11'ler, teknik direktör, son haberler, motivasyon, hava). Bulguları analizde "
+              . "kullan ve 'kaynaklar' alanında özetle. Doğrulayamadığını uydurma.\n\n"
+            : "Güncel sakatlık/kadro bilgisinden emin değilsen uydurma; genel kadro gücü üzerinden değerlendir.\n\n";
+
+        return "Sen deneyimli, profesyonel bir futbol bahis analistisin. Sana BİR maç ve o maçın birden çok bahis "
+            . "marketi (market_key, seçenek kodları ve oranlar) verilecek. Görevin, LİSTELENEN TÜM MARKETLERİ tek tek "
+            . "DERİNLEMESİNE analiz edip her seçenek için gerçekçi olasılık ve somut, veriye dayalı gerekçe üretmek. "
+            . "Hedef kitle iddaa oynayan deneyimli kullanıcılar; yüzeysel yorum istemiyorlar.\n\n"
+            . $research
+            . "Hesaba kat: form, H2H, puan durumu, kadro/sakatlık, iç saha/deplasman karakteri, maçın bağlamı, "
+            . "canlıysa güncel skor/dakika ve oranların ima ettiği olasılık (1/oran) ile kendi olasılığın farkı (değer fırsatı).\n\n"
+            . "Yanıtını YALNIZCA şu JSON şemasında ver (başka hiçbir metin ekleme):\n"
+            . '{"marketler":[{"market_key":"MS","secenekler":[{"kod":"MS1","olasilik":45,"gerekce":"1-2 cümle somut gerekçe"}],'
+            . '"tavsiye":"MS1","guven":7,"ozet":"3-5 cümlelik değerlendirme + değer fırsatı yorumu","kaynaklar":["kısa madde"]}]}'
+            . "\n\nKURALLAR:\n"
+            . "- 'market_key' değerini köşeli parantez içindeki anahtarla AYNEN yaz; HER market için bir nesne döndür.\n"
+            . "- 'kod' alanına verilen seçenek kodunu AYNEN yaz; listede olmayan seçenek uydurma.\n"
+            . "- Her marketin TÜM seçeneklerine olasılık ver; aynı marketin toplamı ~100 olsun ('olasilik' 0-100 tam sayı).\n"
+            . "- 'tavsiye': o markette en mantıklı seçeneğin kodu. 'guven': 1-10 tam sayı.\n"
+            . "- 'gerekce': 1-2 cümle, somut ve veriye dayalı ('form iyi' gibi boş laf yasak). 'ozet': 3-5 cümle; en olası "
+            . "senaryoyu, riskleri ve oranın değerli olup olmadığını açıkça yaz. 'kaynaklar' bilmiyorsan boş dizi.\n"
+            . "- Adı 'Market #...' olan pazarların türü belirsizdir; bunlarda yalnızca oran yapısına dayalı temkinli bir "
+            . "değerlendirme yap ve ozet içinde bunu belirt.\n"
+            . "- HER marketi analiz et; hiçbirini atlama.";
+    }
+
+    private function buildMultiPrompt(array $match, array $defs, array $stats, bool $webSearch, bool $isLive): string
+    {
+        $custom = Settings::get('analysis_prompt');
+        $lines = [];
+        $lines[] = $custom ?: 'Aşağıdaki maçın TÜM listelenen bahis marketlerini analiz et:';
+        $lines[] = '';
+        $lines[] = "Maç: {$match['home_name']} vs {$match['away_name']}";
+        $lines[] = 'Lig: ' . ($match['league_name'] ?? '-') . ' | Tarih: ' . ($match['start_time'] ?? '-');
+        if ($isLive) {
+            $skor = ($match['ms_home'] !== null && $match['ms_away'] !== null)
+                ? $match['ms_home'] . '-' . $match['ms_away'] : 'bilinmiyor';
+            $lines[] = 'DURUM: Maç ŞU AN CANLI OYNANIYOR. Güncel skor: ' . $skor
+                . ($match['minute'] ? ', dakika: ' . $match['minute'] : '') . '.';
+        }
+        $lines[] = '';
+        $lines[] = 'ANALİZ EDİLECEK MARKETLER ([market_key] ad: kod (açıklama)=oran):';
+        foreach ($defs as $def) {
+            $ops = [];
+            foreach ($def['options'] as $o) {
+                $ad = ((string) $o['ad'] !== (string) $o['kod']) ? ' (' . $o['ad'] . ')' : '';
+                $ops[] = $o['kod'] . $ad . '=' . ($o['oran'] ?? '?');
+            }
+            $lines[] = '- [' . $def['key'] . '] ' . $def['label'] . ': ' . implode(', ', $ops);
+        }
+        if (!empty($stats['form_home'])) {
+            $lines[] = '';
+            $lines[] = 'Ev sahibi son maçlar: ' . json_encode($stats['form_home'], JSON_UNESCAPED_UNICODE);
+        }
+        if (!empty($stats['form_away'])) {
+            $lines[] = 'Deplasman son maçlar: ' . json_encode($stats['form_away'], JSON_UNESCAPED_UNICODE);
+        }
+        if (!empty($stats['h2h'])) {
+            $lines[] = 'Aralarındaki maçlar (H2H): ' . json_encode($stats['h2h'], JSON_UNESCAPED_UNICODE);
+        }
+        if (!empty($stats['standings'])) {
+            $lines[] = 'Puan durumu: ' . json_encode($stats['standings'], JSON_UNESCAPED_UNICODE);
+        }
+        if (!empty($stats['injuries'])) {
+            $lines[] = 'Sakat/cezalı oyuncular: ' . json_encode($stats['injuries'], JSON_UNESCAPED_UNICODE);
+        }
+        if (!empty($stats['live'])) {
+            $lines[] = 'Canlı istatistikler: ' . json_encode($stats['live'], JSON_UNESCAPED_UNICODE);
+        }
+        $lines[] = '';
+        $lines[] = 'HER marketi analiz et; hiçbirini atlama. '
+            . ($webSearch ? 'Önce internetten güncel bilgi araştır, sonra ' : '')
+            . 'her seçenek için olasılık + gerekçe içeren, istenen JSON şemasında yanıt ver. SADECE JSON döndür.';
+        return implode("\n", $lines);
+    }
 }
