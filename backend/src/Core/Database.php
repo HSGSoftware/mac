@@ -13,6 +13,7 @@ use PDOException;
 class Database
 {
     private static ?PDO $pdo = null;
+    private static bool $maintenanceDone = false;
 
     public static function pdo(): PDO
     {
@@ -36,8 +37,38 @@ class Database
                 ]);
                 exit;
             }
+            // Oturum saat dilimini İstanbul'a sabitle. Türkiye yıl boyu UTC+3'tür
+            // (2016'dan beri yaz saati yok). Böylece NOW()/CURDATE() ile İstanbul
+            // saatinde saklanan start_time değerleri tutarlı karşılaştırılır.
+            try {
+                self::$pdo->exec("SET time_zone = '+03:00'");
+            } catch (\Throwable $e) {
+                // desteklenmiyorsa sessizce geç
+            }
+            self::runMaintenance();
         }
         return self::$pdo;
+    }
+
+    /**
+     * Hafif bakım: bitmesine rağmen 'live' takılı kalan maçları kapatır.
+     * İstek başına bir kez çalışır. Maç ~2.5 saat sonra kesinlikle bitmiştir
+     * (90 dk + devre arası + uzatmalar + geç başlama payı).
+     */
+    private static function runMaintenance(): void
+    {
+        if (self::$maintenanceDone) {
+            return;
+        }
+        self::$maintenanceDone = true;
+        try {
+            self::$pdo->exec(
+                "UPDATE matches SET status='finished'
+                 WHERE status='live' AND start_time < (NOW() - INTERVAL 150 MINUTE)"
+            );
+        } catch (\Throwable $e) {
+            // bakım hatası uygulamayı etkilemesin
+        }
     }
 
     /** Bağlantıyı sıfırlar (yeniden bağlanma için). */
