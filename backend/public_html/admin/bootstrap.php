@@ -75,6 +75,7 @@ function admin_header(string $title, string $active = ''): void
         'matches.php' => ['Maçlar', 'calendar-event'],
         'analyses.php' => ['Analizler', 'robot'],
         'prompt_logs.php' => ['Prompt Kayıtları', 'journal-text'],
+        'preset_analyses.php' => ['Hazır Analizler', 'clipboard-check'],
         'ai_settings.php' => ['AI Ayarları', 'cpu'],
         'users.php' => ['Kullanıcılar', 'people'],
         'scraper.php' => ['Scraper', 'cloud-download'],

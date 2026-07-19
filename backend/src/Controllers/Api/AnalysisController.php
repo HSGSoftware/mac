@@ -55,6 +55,14 @@ class AnalysisController
         $entitled = $unlockAt !== null
             && (!$isLive || (time() - strtotime($unlockAt)) <= Credits::liveTtl());
 
+        // Analiz zaten hazır mı? (önceden yüklenmiş/önbellekli)
+        $cachedRow = Database::fetch(
+            'SELECT status, created_at FROM market_analyses WHERE match_id = ? AND market_key = ?',
+            [$matchId, $marketKey]
+        );
+        $wasCached = $cachedRow && $cachedRow['status'] === 'done'
+            && $engine->isMarketAnalysisFresh($cachedRow, $isLive);
+
         $remaining = Credits::remaining($user);
         if (!$entitled && $remaining < $cost) {
             Response::error(
@@ -70,6 +78,12 @@ class AnalysisController
         } catch (\Throwable $e) {
             // Üretim başarısızsa kredi DÜŞMEZ
             Response::error('analysis_failed', 'Analiz üretilemedi: ' . $e->getMessage(), 502);
+        }
+
+        // Hazır (önceden yüklenmiş) analiz ilk kez açılıyorsa kısa bir üretim
+        // beklemesi uygula; kullanıcı deneyimi gerçek AI çağrısıyla tutarlı kalır.
+        if ($wasCached && !$entitled) {
+            usleep(random_int(1200, 2400) * 1000);
         }
 
         if (!$entitled) {
