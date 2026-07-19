@@ -8,6 +8,7 @@ use MacRadar\Core\Database;
 use MacRadar\Core\Plans;
 use MacRadar\Core\Request;
 use MacRadar\Core\Response;
+use MacRadar\Core\Settings;
 use MacRadar\Services\AnalysisEngine;
 
 class AnalysisController
@@ -62,6 +63,17 @@ class AnalysisController
         );
         $wasCached = $cachedRow && $cachedRow['status'] === 'done'
             && $engine->isMarketAnalysisFresh($cachedRow, $isLive);
+
+        // Manuel mod: AI sağlayıcısına hiç istek atılmaz; yalnızca admin panelden
+        // kaydedilmiş hazır analizler sunulur. Hazır analiz yoksa kredi düşmeden
+        // "hazırlanıyor" yanıtı dönülür.
+        if (!$wasCached && (string) Settings::get('manual_analysis_mode', '1') === '1') {
+            Response::error(
+                'analysis_preparing',
+                'Bu marketin AI analizi şu anda hazırlanıyor. Lütfen kısa süre sonra tekrar deneyin.',
+                503
+            );
+        }
 
         $remaining = Credits::remaining($user);
         if (!$entitled && $remaining < $cost) {
