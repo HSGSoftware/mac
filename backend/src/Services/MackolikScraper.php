@@ -176,6 +176,69 @@ class MackolikScraper
         ];
     }
 
+    // ================== MARKET İSİM SÖZLÜĞÜ GÜNCELLEME ==================
+
+    /**
+     * Nesine web istemcisinin market tanımlarını çekip MTID -> ad sözlüğünü
+     * tazeler ve settings.mk_market_names içine JSON olarak yazar. Bu override
+     * MarketDictionary'nin önüne geçer; böylece Nesine yeni market tipi
+     * eklediğinde kod güncellemeden isimler gelir.
+     *
+     * @return array{count:int, new:int, source:string}
+     */
+    public function refreshMarketNames(): array
+    {
+        // 1) İddaa sayfasından güncel CCAll.min.js adresini bul (sürüm değişkendir)
+        $page = HttpClient::get('https://www.nesine.com/iddaa', $this->headers(), 40);
+        if ($page['status'] !== 200 || !$page['body']) {
+            throw new \RuntimeException('Nesine iddaa sayfası alınamadı (HTTP ' . $page['status'] . ').');
+        }
+        if (!preg_match('#["\'](//[^"\']*?/CCAll\.min\.js[^"\']*)["\']#', $page['body'], $m)) {
+            throw new \RuntimeException('Nesine market tanım dosyası (CCAll.min.js) sayfada bulunamadı.');
+        }
+        $jsUrl = 'https:' . $m[1];
+
+        // 2) Tanım dosyasını çek
+        $js = HttpClient::get($jsUrl, $this->headers(), 60);
+        if ($js['status'] !== 200 || !$js['body']) {
+            throw new \RuntimeException('Market tanım dosyası indirilemedi (HTTP ' . $js['status'] . ').');
+        }
+
+        // 3) {MTID:{Title:"..."}} kalıplarını çıkar
+        if (!preg_match_all('/(\d+):\{Title:"((?:[^"\\\\]|\\\\.)*)"/', $js['body'], $mm, PREG_SET_ORDER)) {
+            throw new \RuntimeException('Market tanımları ayrıştırılamadı (Nesine yapısı değişmiş olabilir).');
+        }
+        $map = [];
+        foreach ($mm as $hit) {
+            $mtid = (int) $hit[1];
+            $name = stripcslashes($hit[2]);
+            if ($mtid <= 0 || $name === '') {
+                continue;
+            }
+            // Aynı MTID birden çok kez geçebilir; ilk (en kapsamlı) tanımı koru
+            if (!isset($map[(string) $mtid])) {
+                $map[(string) $mtid] = $name;
+            }
+        }
+        if (count($map) < 50) {
+            throw new \RuntimeException('Beklenenden az market tanımı bulundu (' . count($map) . '), güncelleme iptal edildi.');
+        }
+
+        $known = MarketDictionary::MARKETS;
+        $new = 0;
+        foreach ($map as $mtid => $name) {
+            if (!isset($known[(int) $mtid])) {
+                $new++;
+            }
+        }
+        Settings::set('mk_market_names', json_encode($map, JSON_UNESCAPED_UNICODE));
+        $this->customNames = $map;
+        ScrapeLogger::log('market_names', 'success',
+            count($map) . ' market adı güncellendi (' . $new . ' tanesi kodda yoktu). Kaynak: ' . $jsUrl, count($map), null);
+
+        return ['count' => count($map), 'new' => $new, 'source' => $jsUrl];
+    }
+
     // ================== ÇEKİRDEK AYRIŞTIRMA ==================
 
     private function findNesineEvents(array $data): array
@@ -252,33 +315,29 @@ class MackolikScraper
     }
 
     /**
-     * Doğrulanmış market tanımları (gerçek Nesine oran verisinden matematiksel
-     * tutarlılıkla kimliklendirildi). MTID bazlı: [ad, [seçenek etiketleri]]
+     * Market çizgisini (SOV) Türkçe biçimde yazar: 1.5 => "1,5", -1.0 => "-1,0".
+     * Negatif handikap çizgileri de desteklenir (MTID 268 vb.).
      */
-    private const MTID_DEFS = [
-        1 => ['Maç Sonucu', ['1', 'X', '2']],
-        3 => ['Çifte Şans', ['1-X', '1-2', 'X-2']],
-        7 => ['İlk Yarı Sonucu', ['1', 'X', '2']],
-        9 => ['2. Yarı Sonucu', ['1', 'X', '2']],
-        38 => ['Karşılıklı Gol', ['Var', 'Yok']],
-        43 => ['Toplam Gol Aralığı', ['0-1 Gol', '2-3 Gol', '4-5 Gol', '6+ Gol']],
-        49 => ['Toplam Gol Tek/Çift', ['Tek', 'Çift']],
-    ];
-
-    /** MST (market ailesi) bazlı: [ad şablonu ({sov} = gol çizgisi), [etiketler]] */
-    private const MST_DEFS = [
-        101 => ['{sov} Gol Alt/Üst', ['Alt', 'Üst']],
-        7 => ['Maç Sonucu ve {sov} Gol', ['1 ve Alt', 'X ve Alt', '2 ve Alt', '1 ve Üst', 'X ve Üst', '2 ve Üst']],
-        100 => ['Handikaplı Maç Sonucu ({sov})', ['1', 'X', '2']],
-        60 => ['İlk Yarı {sov} Gol Alt/Üst', ['Alt', 'Üst']],
-        603 => ['Ev Sahibi {sov} Gol Alt/Üst', ['Alt', 'Üst']],
-        604 => ['Deplasman {sov} Gol Alt/Üst', ['Alt', 'Üst']],
-    ];
-
     private function sovText($sov): string
     {
         $v = (float) str_replace(',', '.', (string) $sov);
-        return $v > 0 ? number_format($v, 1, ',', '') : '';
+        if (abs($v) < 0.0001) {
+            return '';
+        }
+        return number_format($v, 1, ',', '');
+    }
+
+    /** Sözlük şablonundaki {{handicap}} yer tutucusunu marketin çizgisiyle doldurur. */
+    private function fillTemplate(string $tpl, $sov): string
+    {
+        if (strpos($tpl, '{{handicap}}') === false) {
+            return $tpl;
+        }
+        $txt = $this->sovText($sov);
+        $out = str_replace('{{handicap}}', $txt, $tpl);
+        // Çizgi yoksa "Handikaplı Maç Sonucu ()" gibi boş parantez kalmasın
+        $out = preg_replace('/\(\s*\)/', '', $out);
+        return trim(preg_replace('/\s{2,}/', ' ', $out));
     }
 
     /** Admin panelden yapıştırılabilen elle isim haritası (JSON {mtid: "ad"}). */
@@ -293,6 +352,11 @@ class MackolikScraper
         return $this->customNames;
     }
 
+    /**
+     * Marketin adı. Öncelik: bültendeki MN > admin override (mk_market_names) >
+     * Nesine market sözlüğü (MarketDictionary) > bültendeki nsn haritası >
+     * "Market #NO". Şablondaki {{handicap}} çizgiyle doldurulur.
+     */
     private function marketName(array $m): string
     {
         $mn = trim((string) ($m['MN'] ?? ''));
@@ -300,25 +364,26 @@ class MackolikScraper
             return $mn;
         }
         $mtid = isset($m['MTID']) ? (int) $m['MTID'] : 0;
-        $mst = isset($m['MST']) ? (int) $m['MST'] : 0;
         $no = isset($m['NO']) ? (int) $m['NO'] : 0;
+        $sov = $m['SOV'] ?? null;
+
         $custom = $this->customNameMap();
         if ($mtid && isset($custom[(string) $mtid])) {
-            return (string) $custom[(string) $mtid];
+            return $this->fillTemplate((string) $custom[(string) $mtid], $sov);
         }
-        if (isset(self::MTID_DEFS[$mtid])) {
-            return self::MTID_DEFS[$mtid][0];
-        }
-        if (isset(self::MST_DEFS[$mst])) {
-            return str_replace('{sov}', $this->sovText($m['SOV'] ?? 0), self::MST_DEFS[$mst][0]);
+        if ($mtid && isset(MarketDictionary::MARKETS[$mtid])) {
+            return $this->fillTemplate(MarketDictionary::MARKETS[$mtid][0], $sov);
         }
         if ($mtid && isset($this->nameMap[(string) $mtid])) {
-            return $this->nameMap[(string) $mtid];
+            return $this->fillTemplate($this->nameMap[(string) $mtid], $sov);
         }
         return 'Market #' . ($no ?: $mtid);
     }
 
-    /** Seçenek etiketi: ON > doğrulanmış tanımlar > sıra numarası. */
+    /**
+     * Seçenek etiketi: bültendeki ON (skor/oyuncu gibi dinamik marketlerde dolu)
+     * > Nesine sözlüğündeki etiket > sıra numarası.
+     */
     private function outcomeLabel(array $m, array $o, int $idx, int $total): string
     {
         $on = trim((string) ($o['ON'] ?? ''));
@@ -326,14 +391,11 @@ class MackolikScraper
             return $on;
         }
         $mtid = isset($m['MTID']) ? (int) $m['MTID'] : 0;
-        $mst = isset($m['MST']) ? (int) $m['MST'] : 0;
         // Etiket dizisinde konum: seçeneğin N değeri (1 tabanlı) esas alınır
         $n = isset($o['N']) && is_numeric((string) $o['N']) ? ((int) $o['N']) - 1 : $idx;
-        if (isset(self::MTID_DEFS[$mtid]) && isset(self::MTID_DEFS[$mtid][1][$n])) {
-            return self::MTID_DEFS[$mtid][1][$n];
-        }
-        if (isset(self::MST_DEFS[$mst]) && isset(self::MST_DEFS[$mst][1][$n])) {
-            return self::MST_DEFS[$mst][1][$n];
+        $labels = MarketDictionary::MARKETS[$mtid][2] ?? [];
+        if (isset($labels[$n])) {
+            return $this->fillTemplate((string) $labels[$n], $m['SOV'] ?? null);
         }
         return (string) ($o['N'] ?? ($idx + 1));
     }
@@ -535,7 +597,14 @@ class MackolikScraper
                 $this->put($out, 'KGYOK', $pos(2));
                 continue;
             }
-            if ($mst === 101 && $cnt === 2) { // Gol Alt/Üst ailesi
+            // Sabit çizgili Gol Alt/Üst marketleri (sözlükten doğrulandı)
+            $fixedLines = [11 => '15', 12 => '25', 13 => '35'];
+            if (isset($fixedLines[$mtid]) && $cnt === 2) {
+                $this->put($out, 'ALT' . $fixedLines[$mtid], $pos(1));
+                $this->put($out, 'UST' . $fixedLines[$mtid], $pos(2));
+                continue;
+            }
+            if ($mst === 101 && $cnt === 2) { // Gol Alt/Üst ailesi (dinamik çizgi)
                 $ln = $this->goalLine($sov, '');
                 if ($ln !== null) {
                     $this->put($out, 'ALT' . $ln, $pos(1));

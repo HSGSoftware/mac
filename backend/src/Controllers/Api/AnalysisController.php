@@ -61,9 +61,10 @@ class AnalysisController
         $ready = $cachedRow && $cachedRow['status'] === 'done'
             && $engine->isMarketAnalysisFresh($cachedRow, $isLive);
 
-        // Grup + maliyet. Ana (MS) marketler her zaman ÜCRETSİZ.
-        $group = $engine->groupOfMarket($matchId, $marketKey);
-        $cost = Credits::marketCostForGroup($group, $isLive);
+        // Maliyet: market tipi (MTID) override'ı > grup varsayılanı.
+        // Ana (MS/Maç Sonucu) grubu varsayılan olarak ÜCRETSİZDİR.
+        $meta = $engine->marketMeta($matchId, $marketKey);
+        $cost = Credits::marketCostFor($meta['group'], $meta['mtid'], $isLive);
 
         // Kullanıcı bu marketi daha önce açtı mı? (canlıda TTL süresince geçerli)
         $unlockAt = Credits::unlockAt((int) $user['id'], $matchId, $marketKey);
@@ -110,7 +111,7 @@ class AnalysisController
         }
 
         // Yanıtı HEMEN ver ve bağlantıyı kapat; analiz arka planda sürsün.
-        self::respondPreparing($matchId, $remaining);
+        self::respondPreparing($matchId, $remaining, $pendingActive);
 
         if ($pendingActive) {
             return; // başka bir istek zaten üretiyor
@@ -145,10 +146,15 @@ class AnalysisController
      * "Analiz hazırlanıyor" yanıtını gönderir ve (mümkünse) bağlantıyı kapatır
      * ki arka plan işi kullanıcıyı bekletmesin. exit ÇAĞIRMAZ — çağıran devam eder.
      */
-    private static function respondPreparing(int $matchId, int $remaining): void
+    private static function respondPreparing(int $matchId, int $remaining, bool $alreadyRunning = false): void
     {
-        $msg = 'Yapay zeka bu maçın tüm marketlerini analiz ediyor; son istatistikler ve '
-            . 'oranlar işleniyor. Analiziniz birazdan "Analizlerim" bölümünde hazır olacak.';
+        $msg = $alreadyRunning
+            ? 'Bu maçın analizi şu anda hazırlanıyor. Son istatistikler, kadro haberleri ve '
+              . 'oranlar işleniyor; hazır olduğunda bildirim göndereceğiz.'
+            : 'Yapay zeka bu maçın TÜM marketlerini birlikte analiz ediyor — güncel form, '
+              . 'H2H, sakat/cezalı ve oran hareketleri değerlendiriliyor. Beklemenize gerek yok: '
+              . 'analiz hazır olduğunda bildirim göndereceğiz ve sonuç "Analizlerim" bölümünde olacak.';
+
         $body = json_encode([
             'success' => true,
             'message' => $msg,
@@ -156,6 +162,7 @@ class AnalysisController
                 'preparing' => true,
                 'match_id' => $matchId,
                 'credits_left' => $remaining,
+                'eta_seconds' => 45,
                 'message' => $msg,
             ],
         ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);

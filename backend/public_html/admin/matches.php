@@ -20,8 +20,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             flash("Scrape tamamlandı: {$res['count']} maç ({$res['source']})");
         } elseif ($action === 'analyze') {
             $mid = (int) $_POST['match_id'];
-            (new AnalysisEngine())->analyze($mid, null);
-            flash("Maç #$mid için analiz üretildi.");
+            set_time_limit(240);
+            $count = (new AnalysisEngine())->analyzeAllMarkets($mid, null);
+            flash("Maç #$mid için $count market analizi üretildi.");
         }
     } catch (\Throwable $ex) {
         flash('Hata: ' . $ex->getMessage(), 'danger');
@@ -32,7 +33,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 $rows = Database::fetchAll(
     "SELECT m.*, l.name league_name, ht.name home_name, at.name away_name,
-            (SELECT COUNT(*) FROM analyses a WHERE a.match_id=m.id AND a.status='done') has_analysis
+            (SELECT COUNT(*) FROM market_analyses ma WHERE ma.match_id=m.id AND ma.status='done') has_analysis
      FROM matches m
      LEFT JOIN leagues l ON l.id=m.league_id
      LEFT JOIN teams ht ON ht.id=m.home_team_id

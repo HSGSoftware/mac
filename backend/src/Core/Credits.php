@@ -44,33 +44,69 @@ class Credits
         return max(0, (int) Settings::get($key, $def));
     }
 
-    /** Bir market analizinin kredi maliyeti (canlı maçta daha yüksek). */
-    public static function marketCost(bool $live = false): int
+    /** Canlı maç marketleri için taban maliyet (ücretsiz marketler hariç). */
+    public static function liveMarketCost(): int
     {
-        return $live
-            ? max(0, (int) Settings::get('credit_cost_live_market', 2))
-            : max(0, (int) Settings::get('credit_cost_market', 1));
+        return max(0, (int) Settings::get('credit_cost_live_market', 2));
     }
 
-    /** Grup başına varsayılan kredi maliyeti (ana/MS her zaman ücretsiz). */
-    private const GROUP_COST_DEFAULTS = ['ana' => 0, 'gol' => 1, 'handikap' => 1, 'ozel' => 1];
+    /** Grup başına varsayılan kredi maliyeti (ana/MS varsayılan ÜCRETSİZ). */
+    public const GROUP_COST_DEFAULTS = ['ana' => 0, 'gol' => 1, 'handikap' => 1, 'ozel' => 1];
 
     /**
-     * Grup başına market analizi kredi maliyeti. Ana (MS/Maç Sonucu) marketler
-     * her zaman ÜCRETSİZ. Diğer grupların maliyeti admin panelden ayarlanabilir
-     * (credit_cost_group_<grup>). Canlı maçta en az live maliyeti uygulanır.
+     * Market tipi (MTID) başına kredi override haritası: {"268": 2, "777": 3}
+     * settings.credit_cost_markets içinde JSON olarak saklanır
+     * (Admin > Marketler sayfasından ayarlanır).
      */
-    public static function marketCostForGroup(string $group, bool $live = false): int
+    public static function marketCostOverrides(): array
     {
-        if ($group === 'ana') {
-            return 0;
+        $raw = (string) Settings::get('credit_cost_markets', '');
+        if ($raw === '') {
+            return [];
         }
-        $def = self::GROUP_COST_DEFAULTS[$group] ?? 1;
-        $base = max(0, (int) Settings::get('credit_cost_group_' . $group, $def));
+        $map = json_decode($raw, true);
+        if (!is_array($map)) {
+            return [];
+        }
+        $out = [];
+        foreach ($map as $mtid => $cost) {
+            if (is_numeric((string) $mtid) && is_numeric((string) $cost)) {
+                $out[(int) $mtid] = max(0, (int) $cost);
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Bir market analizinin kredi maliyeti.
+     *
+     * Öncelik: market tipi (MTID) override'ı > grubun varsayılanı.
+     * Ana (MS/Maç Sonucu) grubu varsayılan olarak ÜCRETSİZDİR.
+     * Canlı maçta en az canlı maliyeti uygulanır — ancak ücretsiz (0) kalması
+     * istenen marketler canlıda da ücretsiz kalır.
+     */
+    public static function marketCostFor(string $group, ?int $mtid = null, bool $live = false): int
+    {
+        $overrides = self::marketCostOverrides();
+        if ($mtid !== null && isset($overrides[$mtid])) {
+            $base = $overrides[$mtid];
+        } else {
+            $def = self::GROUP_COST_DEFAULTS[$group] ?? 1;
+            $base = max(0, (int) Settings::get('credit_cost_group_' . $group, $def));
+        }
+        if ($base === 0) {
+            return 0; // kasten ücretsiz bırakılmış market canlıda da ücretsiz
+        }
         if ($live) {
             return max($base, (int) Settings::get('credit_cost_live_market', 2));
         }
         return $base;
+    }
+
+    /** Geriye dönük uyumluluk: grup bazlı maliyet (MTID bilinmiyorsa). */
+    public static function marketCostForGroup(string $group, bool $live = false): int
+    {
+        return self::marketCostFor($group, null, $live);
     }
 
     /** Canlı analizin tazelik süresi (sn): bu süre içinde önbellek geçerli. */
@@ -127,17 +163,22 @@ class Credits
         return $custom !== '' ? $custom : $originalName;
     }
 
-    /** İstemciye gönderilen maliyet tablosu (grup başına). */
+    /**
+     * İstemciye gönderilen maliyet tablosu. Market bazlı override'lar
+     * marketin kendi 'credit_cost' alanıyla gider; bu tablo grup
+     * varsayılanlarını ve canlı taban maliyeti bildirir.
+     */
     public static function costs(): array
     {
         return [
-            'market' => self::marketCost(false),
-            'live_market' => self::marketCost(true),
+            // Eski istemciler için tipik ücretli market maliyeti
+            'market' => self::marketCostFor('gol'),
+            'live_market' => self::liveMarketCost(),
             'groups' => [
-                'ana' => 0,
-                'gol' => self::marketCostForGroup('gol'),
-                'handikap' => self::marketCostForGroup('handikap'),
-                'ozel' => self::marketCostForGroup('ozel'),
+                'ana' => self::marketCostFor('ana'),
+                'gol' => self::marketCostFor('gol'),
+                'handikap' => self::marketCostFor('handikap'),
+                'ozel' => self::marketCostFor('ozel'),
             ],
         ];
     }

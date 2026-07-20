@@ -53,6 +53,10 @@ $router->post('/auth/refresh', [$auth, 'refresh']);
 $router->get('/me', [$auth, 'me']);
 $router->post('/me/fcm', [$auth, 'updateFcm']);
 
+// ---- Bildirimler ----
+$router->get('/me/notifications', [$auth, 'notifications']);
+$router->post('/me/notifications/read', [$auth, 'readNotifications']);
+
 // ---- Maçlar / Ligler ----
 $router->get('/leagues', [$matches, 'leagues']);
 $router->get('/matches', [$matches, 'index']);

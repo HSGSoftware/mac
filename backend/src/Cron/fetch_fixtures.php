@@ -10,6 +10,7 @@ require_once dirname(__DIR__) . '/autoload.php';
 use MacRadar\Core\Config;
 use MacRadar\Services\MackolikScraper;
 use MacRadar\Services\ScrapeLogger;
+use MacRadar\Services\TeamLogoService;
 
 Config::load();
 date_default_timezone_set(Config::get('app.timezone', 'Europe/Istanbul'));
@@ -35,3 +36,13 @@ $duration = (int) round((microtime(true) - $start) * 1000);
 $status = $errors ? ($total > 0 ? 'partial' : 'error') : 'success';
 ScrapeLogger::log('fetch_fixtures', $status, $errors ? implode(' | ', $errors) : "OK", $total, $duration);
 echo "Toplam: $total maç, süre {$duration}ms\n";
+
+// Eksik takım amblemlerini tamamla (ayrı cron gerekmesin diye burada).
+// Her çalışmada sınırlı sayıda takım denenir; bulunamayanlar işaretlenip
+// team_logo_retry_days sonra tekrar denenir.
+try {
+    $logos = (new TeamLogoService())->fillMissing(40);
+    echo "Amblem: {$logos['checked']} denendi, {$logos['found']} bulundu, {$logos['missing']} eksik kaldı\n";
+} catch (\Throwable $e) {
+    echo 'Amblem hatası: ' . $e->getMessage() . "\n";
+}

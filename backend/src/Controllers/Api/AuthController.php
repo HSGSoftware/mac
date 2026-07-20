@@ -8,6 +8,7 @@ use MacRadar\Core\Database;
 use MacRadar\Core\Plans;
 use MacRadar\Core\Request;
 use MacRadar\Core\Response;
+use MacRadar\Services\NotificationService;
 
 class AuthController
 {
@@ -80,6 +81,34 @@ class AuthController
         Response::ok(null, 'Bildirim token güncellendi.');
     }
 
+    /**
+     * GET /me/notifications
+     * Uygulama içi bildirimler + okunmamış sayısı. Uygulama bunu periyodik
+     * yoklayıp yeni gelenleri cihaz bildirimi olarak gösterir.
+     */
+    public function notifications(Request $req): void
+    {
+        $user = Auth::require($req);
+        $userId = (int) $user['id'];
+        Response::ok([
+            'items' => NotificationService::listFor($userId, 50),
+            'unread' => NotificationService::unreadCount($userId),
+        ]);
+    }
+
+    /**
+     * POST /me/notifications/read  {id?}
+     * id verilirse tek bildirimi, verilmezse tümünü okundu işaretler.
+     */
+    public function readNotifications(Request $req): void
+    {
+        $user = Auth::require($req);
+        $userId = (int) $user['id'];
+        $id = $req->input('id');
+        NotificationService::markRead($userId, $id !== null && $id !== '' ? (int) $id : null);
+        Response::ok(['unread' => NotificationService::unreadCount($userId)]);
+    }
+
     private function publicUser(array $u): array
     {
         $tier = Plans::tierOf($u);
@@ -94,6 +123,7 @@ class AuthController
             'daily_credits' => Credits::dailyAllowance($tier),
             'credits_used_today' => Credits::usedToday($u),
             'credits_left' => Credits::remaining($u),
+            'unread_notifications' => NotificationService::unreadCount((int) $u['id']),
             'created_at' => $u['created_at'],
         ];
     }

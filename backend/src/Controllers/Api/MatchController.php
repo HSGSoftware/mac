@@ -167,6 +167,7 @@ class MatchController
         // panelinden ayarlanır). Her markete kararlı bir 'key' verilir; AI
         // analizi bu key ile market başına ayrı ayrı istenir (kredi sistemi).
         $tier = Plans::tierOf($viewer);
+        $isLive = ($row['status'] ?? '') === 'live';
         $byGroup = [];
         foreach ($markets as $m) {
             if (!is_array($m)) {
@@ -176,9 +177,12 @@ class MatchController
             // Anahtar ve grup ORİJİNAL ada göre (kararlılık); görünen ad
             // admin panelindeki isim eşlemesinden gelebilir.
             $key = Credits::groupKeyForMarketName($name);
+            $mtid = isset($m['mtid']) ? (int) $m['mtid'] : null;
             $m['grup'] = $key;
             $m['key'] = Credits::marketKeyFor($name, $m['sov'] ?? null);
             $m['ad'] = Credits::displayMarketName($name);
+            // Bu marketin analizinin kredi maliyeti (0 = ücretsiz)
+            $m['credit_cost'] = Credits::marketCostFor($key, $mtid, $isLive);
             $byGroup[$key][] = $m;
         }
         $groupsOut = [];
@@ -230,6 +234,21 @@ class MatchController
             }
         }
 
+        // Arka planda analiz üretiliyor mu? (uygulama "hazırlanıyor" gösterir)
+        $pending = false;
+        try {
+            $p = Database::fetch(
+                "SELECT created_at FROM market_analyses
+                 WHERE match_id = ? AND status = 'pending'
+                 ORDER BY created_at DESC LIMIT 1",
+                [$id]
+            );
+            // 5 dakikadan eski 'pending' takılı kalmış sayılır
+            $pending = $p && (time() - strtotime($p['created_at'])) < 300;
+        } catch (\Throwable $e) {
+            // tablo yoksa akışı bozma
+        }
+
         Response::ok([
             'match' => $this->presentDetail($row),
             // Boş dizi PHP'de JSON [] üretir; istemci Map beklediği için obje olarak gönder.
@@ -238,6 +257,7 @@ class MatchController
             'market_groups' => $groupsOut,
             'stats' => (object) $stats,
             'market_analyses' => $marketAnalyses,
+            'analysis_pending' => $pending,
             'credit_costs' => Credits::costs(),
             'credits_left' => $viewer ? Credits::remaining($viewer) : null,
             'live_analysis_ttl' => Credits::liveTtl(),
@@ -517,7 +537,8 @@ class MatchController
         $rows = Database::fetchAll(
             "SELECT m.id, m.start_time, m.status, m.ms_home, m.ms_away,
                     l.name AS league_name,
-                    ht.name AS home_name, at.name AS away_name,
+                    ht.name AS home_name, ht.logo_url AS home_logo,
+                    at.name AS away_name, at.logo_url AS away_logo,
                     a.id AS analysis_id, a.result AS a_result, a.created_at AS analyzed_at
              FROM user_analysis_history h
              JOIN matches m ON m.id = h.match_id
@@ -546,6 +567,28 @@ class MatchController
                 }
             } catch (\Throwable $e) {
                 // tablo yoksa legacy ile devam
+            }
+        }
+
+        // Arka planda hazırlanan analizler ("hazırlanıyor" rozeti için)
+        $pendingMap = [];
+        if ($historyIds) {
+            try {
+                $place = implode(',', array_fill(0, count($historyIds), '?'));
+                foreach (Database::fetchAll(
+                    "SELECT match_id, MAX(created_at) AS started
+                     FROM market_analyses
+                     WHERE status='pending' AND match_id IN ($place)
+                     GROUP BY match_id",
+                    $historyIds
+                ) as $pr) {
+                    // 5 dakikadan eski pending takılı kalmış sayılır
+                    if ((time() - strtotime((string) $pr['started'])) < 300) {
+                        $pendingMap[(int) $pr['match_id']] = true;
+                    }
+                }
+            } catch (\Throwable $e) {
+                // tablo yoksa sessiz geç
             }
         }
 
@@ -605,8 +648,13 @@ class MatchController
                 'match_id' => (int) $r['id'],
                 'league' => $r['league_name'],
                 'match' => $r['home_name'] . ' — ' . $r['away_name'],
+                'home' => ['name' => $r['home_name'], 'logo' => $r['home_logo']],
+                'away' => ['name' => $r['away_name'], 'logo' => $r['away_logo']],
                 'date' => $r['start_time'],
                 'has_analysis' => $sig !== null,
+                // Analiz henüz yokken arka planda üretiliyorsa uygulama
+                // "hazırlanıyor" gösterir ("henüz analiz yok" değil).
+                'analysis_pending' => $sig === null && isset($pendingMap[(int) $r['id']]),
                 'pick' => $pick,
                 'model_pct' => $sig['model_pct'] ?? null,
                 'odds' => $odd,

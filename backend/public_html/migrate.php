@@ -78,39 +78,159 @@ if (!$run) {
     exit;
 }
 
+/**
+ * SQL dosyasını tek tek çalıştırılabilir ifadelere böler.
+ * Yorumları, tırnak içindeki noktalı virgülleri dikkate alır.
+ */
+function migration_split(string $sql): array
+{
+    $stmts = [];
+    $buf = '';
+    $len = strlen($sql);
+    $quote = null;
+    for ($i = 0; $i < $len; $i++) {
+        $c = $sql[$i];
+        $next = $i + 1 < $len ? $sql[$i + 1] : '';
+
+        if ($quote === null) {
+            // Satır yorumu: -- veya #
+            if (($c === '-' && $next === '-') || $c === '#') {
+                while ($i < $len && $sql[$i] !== "\n") {
+                    $i++;
+                }
+                $buf .= "\n";
+                continue;
+            }
+            // Blok yorumu
+            if ($c === '/' && $next === '*') {
+                $end = strpos($sql, '*/', $i + 2);
+                $i = $end === false ? $len : $end + 1;
+                continue;
+            }
+            if ($c === "'" || $c === '"' || $c === '`') {
+                $quote = $c;
+            } elseif ($c === ';') {
+                if (trim($buf) !== '') {
+                    $stmts[] = trim($buf);
+                }
+                $buf = '';
+                continue;
+            }
+        } elseif ($c === $quote) {
+            // Kaçış: '' veya \'
+            if ($next === $quote) {
+                $buf .= $c;
+                $i++;
+            } elseif ($i > 0 && $sql[$i - 1] !== '\\') {
+                $quote = null;
+            }
+        }
+        $buf .= $c;
+    }
+    if (trim($buf) !== '') {
+        $stmts[] = trim($buf);
+    }
+    return $stmts;
+}
+
+/** Bu hata "zaten uygulanmış" demektir; migration'ı başarısız saymayız. */
+function migration_is_harmless(\Throwable $e): bool
+{
+    $msg = $e->getMessage();
+    foreach ([
+        'Duplicate column name',
+        'Duplicate key name',
+        'already exists',
+        'Duplicate entry',
+        'Multiple primary key',
+        'check that column/key exists',
+    ] as $needle) {
+        if (stripos($msg, $needle) !== false) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Uygula
 $pdo = Database::pdo();
 $okCount = 0;
 foreach ($files as $f) {
     $name = htmlspecialchars(basename($f));
-    try {
-        $sql = file_get_contents($f);
-        if ($sql === false || trim($sql) === '') {
-            echo '<div class="card"><span class="muted">— ' . $name . ' (boş, atlandı)</span></div>';
-            continue;
+    $sql = file_get_contents($f);
+    if ($sql === false || trim($sql) === '') {
+        echo '<div class="card"><span class="muted">— ' . $name . ' (boş, atlandı)</span></div>';
+        continue;
+    }
+
+    $applied = 0;
+    $skipped = 0;
+    $errors = [];
+    foreach (migration_split($sql) as $stmt) {
+        try {
+            $pdo->exec($stmt);
+            $applied++;
+        } catch (\Throwable $e) {
+            if (migration_is_harmless($e)) {
+                $skipped++;   // zaten uygulanmış
+            } else {
+                $errors[] = $e->getMessage();
+            }
         }
-        $pdo->exec($sql);
-        echo '<div class="card"><span class="ok">✓ ' . $name . ' uygulandı.</span></div>';
+    }
+
+    if ($errors) {
+        echo '<div class="card"><span class="err">✗ ' . $name . ' — ' . count($errors) . ' hata:</span><ul>';
+        foreach ($errors as $er) {
+            echo '<li class="err">' . htmlspecialchars($er) . '</li>';
+        }
+        echo '</ul></div>';
+    } else {
+        echo '<div class="card"><span class="ok">✓ ' . $name . '</span> '
+            . '<span class="muted">— ' . $applied . ' ifade uygulandı'
+            . ($skipped ? ', ' . $skipped . ' tanesi zaten mevcuttu' : '') . '.</span></div>';
         $okCount++;
-    } catch (\Throwable $e) {
-        echo '<div class="card"><span class="err">✗ ' . $name . ' — hata: '
-            . htmlspecialchars($e->getMessage()) . '</span></div>';
     }
 }
 
-// Doğrulama: yeni tablo var mı?
-try {
-    $exists = Database::fetch("SHOW TABLES LIKE 'user_analysis_history'");
-    echo '<hr>';
-    if ($exists) {
-        echo '<p class="ok"><strong>✓ Güncelleme tamam.</strong> '
-            . '“Analizlerim” tablosu (<code>user_analysis_history</code>) hazır.</p>';
-    } else {
-        echo '<p class="err">Tablo bulunamadı; yukarıdaki hataları kontrol edin.</p>';
+// Doğrulama: beklenen tablo/kolonlar yerinde mi?
+echo '<hr><div class="card"><strong>Doğrulama</strong><ul>';
+$checks = [
+    'user_analysis_history' => '“Analizlerim” geçmişi',
+    'market_analyses' => 'Market analizleri',
+    'user_unlocks' => 'Açılan marketler',
+    'notifications' => 'Bildirimler',
+    'ai_prompt_logs' => 'AI prompt kayıtları',
+];
+$allOk = true;
+foreach ($checks as $table => $label) {
+    try {
+        $exists = Database::fetch("SHOW TABLES LIKE '" . $table . "'");
+    } catch (\Throwable $e) {
+        $exists = null;
     }
-} catch (\Throwable $e) {
-    echo '<p class="err">Doğrulama hatası: ' . htmlspecialchars($e->getMessage()) . '</p>';
+    if ($exists) {
+        echo '<li class="ok">✓ ' . $label . ' <code>' . $table . '</code></li>';
+    } else {
+        echo '<li class="err">✗ ' . $label . ' <code>' . $table . '</code> bulunamadı</li>';
+        $allOk = false;
+    }
 }
+try {
+    $col = Database::fetch("SHOW COLUMNS FROM teams LIKE 'logo_checked_at'");
+    echo $col
+        ? '<li class="ok">✓ Takım amblemi alanı <code>teams.logo_checked_at</code></li>'
+        : '<li class="err">✗ <code>teams.logo_checked_at</code> bulunamadı</li>';
+    $allOk = $allOk && (bool) $col;
+} catch (\Throwable $e) {
+    echo '<li class="err">✗ teams kolon kontrolü: ' . htmlspecialchars($e->getMessage()) . '</li>';
+    $allOk = false;
+}
+echo '</ul>';
+echo $allOk
+    ? '<p class="ok"><strong>Güncelleme tamam.</strong> Uygulama yeni sürümle çalışmaya hazır.</p>'
+    : '<p class="err">Eksikler var; yukarıdaki hataları kontrol edin.</p>';
+echo '</div>';
 
 echo '<p class="muted">Toplam ' . $okCount . '/' . count($files) . ' dosya uygulandı. '
     . 'İşiniz bittiyse bu <code>migrate.php</code> dosyasını sunucudan silebilirsiniz.</p>';

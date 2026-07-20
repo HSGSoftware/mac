@@ -29,14 +29,17 @@ Admin Panel  ──────────►  PHP (public_html/admin)      ▲
 ```
 
 - **Backend:** Framework'süz saf PHP (PSR-4 autoload, harici bağımlılık yok). PDO/MySQL.
-- **Analiz:** İstek üzerine üretilir ve DB'de önbelleğe alınır — aynı maç için tek AI çağrısı.
+- **Analiz:** Bir market istendiğinde maçın **TÜM marketleri TEK AI çağrısıyla** üretilir
+  (hız + maliyet) ve DB'de önbelleğe alınır. **Kullanıcı beklemez:** analiz hazır değilse
+  istek anında "hazırlanıyor" yanıtı döner, üretim arka planda sürer ve bitince
+  **bildirim** gider.
 - **Üyelik & Kredi:** 4 kademe (Ücretsiz / Bronz / Gümüş / Altın). Her paketin
   **günlük AI analiz kredisi** vardır (vars. 1/20/50/120); krediler her gün sıfırlanır,
-  ertesi güne devretmez. **Her market AYRI bir AI çağrısıyla analiz edilir ve ayrı
-  kredi tüketir** (internet araştırması dahil — Gemini web grounding). Aynı maçın aynı
-  marketini tekrar görüntülemek ücretsizdir. Oran gruplarının hangi pakete açık olduğu,
-  kredi miktarları ve maliyetler admin panelinden ayarlanır. Günün AI Kuponu: Gümüş +
-  Altın. Canlı maçlarda anlık AI analizleri: yalnız Altın (daha yüksek kredi).
+  ertesi güne devretmez. Kredi yalnızca **ücretli bir marketi ilk kez görüntülerken**
+  düşer; **Maç Sonucu (ana marketler) ücretsizdir** — oranla birlikte gösterilir.
+  Maliyet market tipi bazında ayarlanabilir (Admin > Marketler). Aynı marketi tekrar
+  görüntülemek ücretsizdir. Günün AI Kuponu: Gümüş + Altın. Canlı maçlarda anlık AI
+  analizleri: yalnız Altın.
 
 ## Dizin yapısı
 
@@ -94,6 +97,21 @@ Scraper iki stratejiyi destekler: **JSON feed** (birincil) ve **HTML/XPath** (ye
 
 Manuel test: Admin > Scraper > "Bugünü şimdi çek" veya Admin > Maçlar > "Bu tarihi Mackolik'ten çek".
 
+## Market isimleri ve takım amblemleri
+
+Nesine bülteni futbol maçlarında **market adı göndermez** — yalnızca market tipi
+(`MTID`), çizgi (`SOV`) ve oranlar gelir. Adlar `src/Services/MarketDictionary.php`
+sözlüğünden çözülür (704 market tipi; bültendeki tüm aktif tipleri kapsar).
+Nesine yeni bir market tipi eklerse **Admin > Marketler > "Nesine'den isimleri
+güncelle"** butonu sözlüğü kod değiştirmeden tazeler.
+
+Aynı sayfadan her market tipinin **kredi maliyeti** ve **uygulamada görünen adı**
+ayarlanır; boş bırakılan maliyet grubun varsayılanını kullanır.
+
+Takım amblemleri Nesine'de yoktur; TheSportsDB'den (ücretsiz, anahtarsız) bulunup
+`teams.logo_url`'e yazılır. `fetch_fixtures` cron'u her çalışmada eksik amblemleri
+tamamlar; bulunamayan takımlar 30 gün sonra yeniden denenir.
+
 ## AI sağlayıcı ayarları
 
 **Admin > AI Ayarları**:
@@ -131,12 +149,14 @@ API adresi `API_BASE_URL` environment variable'ı ile derleme zamanında enjekte
 |---|---|---|
 | GET | `/health` | Sağlık kontrolü |
 | POST | `/auth/register` · `/auth/login` · `/auth/refresh` | Kimlik |
-| GET | `/me` | Aktif kullanıcı |
+| GET | `/me` | Aktif kullanıcı (kredi + okunmamış bildirim sayısı) |
+| GET | `/me/notifications` | Bildirimler + okunmamış sayısı |
+| POST | `/me/notifications/read` | Bildirimi (`id`) veya tümünü okundu işaretle |
 | GET | `/leagues` | Ligler |
 | GET | `/matches?date=YYYY-MM-DD` | Bülten (lige gruplu, listede model `signal` alanı) |
 | GET | `/matches/live` | Canlı maçlar (canlı oran + skor) |
 | GET | `/matches/{id}` | Maç detayı (oran + grup görünürlüğü `market_groups` + görünür marketler + istatistik + kullanıcının açtığı `market_analyses`) |
-| POST | `/matches/{id}/analyze-market` | TEK marketi AI ile analiz et (`{market_key}`, kredi tüketir; canlı maçta yalnız Altın) |
+| POST | `/matches/{id}/analyze-market` | Market analizi iste (`{market_key}`). Hazırsa döner ve kredi düşer; değilse **202** `preparing:true` döner, tüm marketler arka planda üretilir ve bitince bildirim gider |
 | GET | `/me/analyses` | "Analizlerim" — kullanıcının incelediği maçlar + isabet |
 | GET | `/coupon/daily` | "Günün AI Kuponu" — Gümüş + Altın |
 | GET/POST/DELETE | `/favorites` | Favoriler |

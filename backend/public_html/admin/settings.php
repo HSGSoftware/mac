@@ -12,10 +12,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         Settings::set('announcement', trim($_POST['announcement'] ?? ''));
         flash('Genel ayarlar kaydedildi.');
     } elseif ($action === 'credits') {
+        // NOT: Market maliyetleri (grup + market bazlı) Marketler sayfasından yönetilir.
         $creditKeys = [
             'free_daily_credits' => 1, 'bronz_daily_credits' => 20,
             'gumus_daily_credits' => 50, 'altin_daily_credits' => 120,
-            'credit_cost_market' => 1, 'credit_cost_live_market' => 2,
             'live_analysis_ttl' => 180,
         ];
         foreach ($creditKeys as $key => $def) {
@@ -28,24 +28,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         Settings::set('ai_web_search', isset($_POST['ai_web_search']) ? '1' : '0');
         flash('Kredi ayarları kaydedildi.');
     } elseif ($action === 'market_names') {
-        // Grup adları
+        // Grup adları (market adları Marketler sayfasından yönetilir)
         foreach (['ana', 'gol', 'handikap', 'ozel'] as $g) {
             Settings::set('group_name_' . $g, trim($_POST['group_name_' . $g] ?? ''));
         }
-        // Market adı eşlemesi: her satır "Orijinal Ad => Yeni Ad"
-        $map = [];
-        foreach (preg_split('/\r\n|\r|\n/', (string) ($_POST['market_name_overrides'] ?? '')) as $line) {
-            $line = trim($line);
-            if ($line === '' || !str_contains($line, '=>')) {
-                continue;
-            }
-            [$orig, $new] = array_map('trim', explode('=>', $line, 2));
-            if ($orig !== '' && $new !== '') {
-                $map[$orig] = $new;
-            }
-        }
-        Settings::set('market_name_overrides', $map ? json_encode($map, JSON_UNESCAPED_UNICODE) : '');
-        flash('Market isimleri kaydedildi.');
+        flash('Grup adları kaydedildi.');
     } elseif ($action === 'password') {
         $new = $_POST['new_password'] ?? '';
         if (strlen($new) < 6) {
@@ -86,7 +73,9 @@ $tierSelect = function (string $name, $current) use ($tierOptions) {
 <div class="card p-4 mb-3">
     <h5 class="text-light mb-3">Günlük Kredi Ayarları</h5>
     <p class="text-secondary" style="font-size:13px">Krediler her gün sıfırlanır; ertesi güne devretmez.
-       HER MARKET AYRI analiz edilir ve ayrı kredi tüketir. Canlı maç analizleri yalnızca Altın pakettedir.</p>
+       Bir maç açıldığında tüm marketler tek AI çağrısıyla üretilir; kredi yalnızca ücretli bir marketi
+       ilk kez görüntülerken düşer. Canlı maç analizleri yalnızca Altın pakettedir.
+       Market başına kredi maliyetleri <a href="markets.php" class="link-info">Marketler</a> sayfasındadır.</p>
     <form method="post">
         <input type="hidden" name="csrf" value="<?= csrf_token() ?>">
         <div class="row">
@@ -100,10 +89,6 @@ $tierSelect = function (string $name, $current) use ($tierOptions) {
                 <input type="number" name="altin_daily_credits" class="form-control mb-3" value="<?= e($s['altin_daily_credits'] ?? '120') ?>" min="0"></div>
         </div>
         <div class="row">
-            <div class="col-md-3"><label class="form-label">Market analizi maliyeti (kredi)</label>
-                <input type="number" name="credit_cost_market" class="form-control mb-3" value="<?= e($s['credit_cost_market'] ?? '1') ?>" min="0"></div>
-            <div class="col-md-3"><label class="form-label">Canlı market analizi maliyeti (kredi)</label>
-                <input type="number" name="credit_cost_live_market" class="form-control mb-3" value="<?= e($s['credit_cost_live_market'] ?? '2') ?>" min="0"></div>
             <div class="col-md-3"><label class="form-label">Canlı analiz tazelik süresi (sn)</label>
                 <input type="number" name="live_analysis_ttl" class="form-control mb-3" value="<?= e($s['live_analysis_ttl'] ?? '180') ?>" min="30"></div>
             <div class="col-md-3"><label class="form-label d-block">İnternet araştırması (Gemini)</label>
@@ -127,21 +112,11 @@ $tierSelect = function (string $name, $current) use ($tierOptions) {
         <button name="action" value="credits" class="btn btn-success"><i class="bi bi-save"></i> Kredi Ayarlarını Kaydet</button>
     </form>
 </div>
-<?php
-// Kayıtlı market adı eşlemesini "Orijinal => Yeni" satırlarına çevir
-$ovLines = '';
-$ovMap = json_decode((string) ($s['market_name_overrides'] ?? ''), true);
-if (is_array($ovMap)) {
-    foreach ($ovMap as $orig => $new) {
-        $ovLines .= $orig . ' => ' . $new . "\n";
-    }
-}
-?>
 <div class="card p-4 mb-3">
-    <h5 class="text-light mb-3">Market İsimleri</h5>
-    <p class="text-secondary" style="font-size:13px">Uygulamada gösterilen grup ve market adlarını buradan
-       değiştirebilirsiniz. Boş bırakılan alanlar varsayılan adıyla gösterilir. Eşleme yalnızca GÖRÜNEN adı
-       değiştirir; analizler ve gruplama orijinal ada göre çalışmaya devam eder.</p>
+    <h5 class="text-light mb-3">Grup Adları</h5>
+    <p class="text-secondary" style="font-size:13px">Uygulamada gösterilen oran grubu adları. Boş bırakılanlar
+       varsayılan adıyla gösterilir. Tek tek <strong>market</strong> adlarını değiştirmek için
+       <a href="markets.php" class="link-info">Marketler</a> sayfasını kullanın.</p>
     <form method="post">
         <input type="hidden" name="csrf" value="<?= csrf_token() ?>">
         <div class="row">
@@ -154,12 +129,7 @@ if (is_array($ovMap)) {
             <div class="col-md-3"><label class="form-label">"Özel Marketler" grubunun adı</label>
                 <input type="text" name="group_name_ozel" class="form-control mb-3" placeholder="Özel Marketler" value="<?= e($s['group_name_ozel'] ?? '') ?>"></div>
         </div>
-        <label class="form-label">Market adı eşlemesi — her satıra bir kural: <code>Orijinal Ad =&gt; Yeni Ad</code></label>
-        <textarea name="market_name_overrides" class="form-control mb-2" rows="6"
-            placeholder="Maç Sonucu => Maç Kazananı&#10;Karşılıklı Gol => KG Var/Yok"><?= e(trim($ovLines)) ?></textarea>
-        <p class="text-secondary" style="font-size:12px">Orijinal adlar, kaynaktan (Mackolik) gelen market adlarıdır ve
-           maç detayındaki market listesinde görülür. Örn: <code>2,5 Gol Alt/Üst =&gt; 2.5 Gol Sınırı</code></p>
-        <button name="action" value="market_names" class="btn btn-success"><i class="bi bi-save"></i> Market İsimlerini Kaydet</button>
+        <button name="action" value="market_names" class="btn btn-success"><i class="bi bi-save"></i> Grup Adlarını Kaydet</button>
     </form>
 </div>
 <div class="card p-4">

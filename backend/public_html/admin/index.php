@@ -6,10 +6,35 @@ use MacRadar\Core\Database;
 
 $today = date('Y-m-d');
 $matchCount = (int) (Database::fetch('SELECT COUNT(*) c FROM matches WHERE DATE(start_time) = ?', [$today])['c'] ?? 0);
-$analysisToday = (int) (Database::fetch("SELECT COUNT(*) c FROM analyses WHERE DATE(created_at) = ? AND status='done'", [$today])['c'] ?? 0);
 $userCount = (int) (Database::fetch('SELECT COUNT(*) c FROM users')['c'] ?? 0);
-$premiumCount = (int) (Database::fetch("SELECT COUNT(*) c FROM users WHERE plan='premium'")['c'] ?? 0);
-$tokenTotal = (int) (Database::fetch('SELECT COALESCE(SUM(token_usage),0) s FROM analyses WHERE DATE(created_at) = ?', [$today])['s'] ?? 0);
+// Ücretli paketler: bronz/gumus/altin (eski kayıtlarda 'premium'), süresi dolmamış
+$premiumCount = (int) (Database::fetch(
+    "SELECT COUNT(*) c FROM users
+     WHERE plan IN ('bronz','gumus','altin','premium')
+       AND (premium_until IS NULL OR premium_until >= NOW())"
+)['c'] ?? 0);
+
+// Analiz sayacı: yeni market bazlı sistem + eski analyses tablosu
+$analysisToday = 0;
+$tokenTotal = 0;
+try {
+    $analysisToday = (int) (Database::fetch(
+        "SELECT COUNT(*) c FROM market_analyses WHERE DATE(created_at) = ? AND status='done'",
+        [$today]
+    )['c'] ?? 0);
+    $tokenTotal = (int) (Database::fetch(
+        'SELECT COALESCE(SUM(token_usage),0) s FROM market_analyses WHERE DATE(created_at) = ?',
+        [$today]
+    )['s'] ?? 0);
+} catch (\Throwable $e) {
+    // market_analyses yoksa (migration uygulanmadıysa) eskiye düş
+}
+$analysisToday += (int) (Database::fetch(
+    "SELECT COUNT(*) c FROM analyses WHERE DATE(created_at) = ? AND status='done'", [$today]
+)['c'] ?? 0);
+$tokenTotal += (int) (Database::fetch(
+    'SELECT COALESCE(SUM(token_usage),0) s FROM analyses WHERE DATE(created_at) = ?', [$today]
+)['s'] ?? 0);
 
 $successRow = Database::fetch("SELECT COUNT(*) total, SUM(was_correct=1) correct FROM analysis_results WHERE was_correct IS NOT NULL");
 $successRate = ($successRow && (int)$successRow['total'] > 0)

@@ -6,6 +6,7 @@ use MacRadar\Core\Credits;
 use MacRadar\Core\Database;
 use MacRadar\Core\Settings;
 use MacRadar\Services\Llm\LlmFactory;
+use MacRadar\Services\NotificationService;
 
 /**
  * Maç verilerini AI analizine dönüştüren motor.
@@ -247,6 +248,7 @@ class AnalysisEngine
                 'key' => 'MS',
                 'label' => Credits::displayMarketName('Maç Sonucu'),
                 'group' => 'ana',
+                'mtid' => 1,
                 'options' => $opts,
             ];
         }
@@ -273,12 +275,19 @@ class AnalysisEngine
             if (!$opts) {
                 return null;
             }
+            // Market adı çizgiyi zaten içeriyorsa (ör. "Handikaplı Maç Sonucu (-1,0)")
+            // tekrar eklemeyelim.
             $sov = $mk['sov'] ?? null;
-            $label = Credits::displayMarketName($name) . ($sov !== null && $sov !== '' ? " ($sov)" : '');
+            $display = Credits::displayMarketName($name);
+            $sovTxt = ($sov !== null && $sov !== '') ? (string) $sov : '';
+            $label = ($sovTxt !== '' && strpos($display, $sovTxt) === false)
+                ? $display . " ($sovTxt)"
+                : $display;
             return [
                 'key' => $key,
                 'label' => $label,
                 'group' => Credits::groupKeyForMarketName($name),
+                'mtid' => isset($mk['mtid']) ? (int) $mk['mtid'] : null,
                 'options' => $opts,
             ];
         }
@@ -658,6 +667,33 @@ class AnalysisEngine
     }
 
     /**
+     * Marketin fiyatlandırma bilgisi: ['group' => ..., 'mtid' => ...].
+     * Bilinmeyen markette 'ozel' grubu varsayılır.
+     */
+    public function marketMeta(int $matchId, string $marketKey): array
+    {
+        if ($marketKey === 'MS') {
+            return ['group' => 'ana', 'mtid' => 1];
+        }
+        $def = $this->resolveMarket($matchId, $marketKey);
+        return [
+            'group' => $def['group'] ?? 'ozel',
+            'mtid' => $def['mtid'] ?? null,
+        ];
+    }
+
+    /**
+     * Analize gönderilecek en fazla seçenek sayısı. Oyuncu bazlı marketler
+     * (ör. "Oyuncu Şut Çeker" — 99 seçenek) prompt'u aşırı şişirir ve AI'ın
+     * oyuncu bazında güvenilir verisi yoktur; bu marketler analiz dışı bırakılır,
+     * oranları uygulamada yine görünür.
+     */
+    private function maxMarketOptions(): int
+    {
+        return max(2, (int) Settings::get('ai_max_market_options', 24));
+    }
+
+    /**
      * Maçın TÜM marketlerini TEK AI çağrısıyla analiz eder ve her marketi
      * market_analyses tablosuna 'done' olarak yazar (hız + maliyet için).
      * @return int üretilen (done) market sayısı
@@ -689,8 +725,22 @@ class AnalysisEngine
         }
 
         $defs = $this->allMarketDefs($matchId);
+        // Çok seçenekli marketleri (oyuncu bazlı vb.) analiz dışı bırak
+        $maxOpts = $this->maxMarketOptions();
+        $skipped = 0;
+        foreach ($defs as $k => $d) {
+            if (count($d['options']) > $maxOpts) {
+                unset($defs[$k]);
+                $skipped++;
+            }
+        }
         if (!$defs) {
             return 0;
+        }
+        if ($skipped > 0) {
+            ScrapeLogger::log('analyze_markets', 'success',
+                "Maç #$matchId: $skipped market seçenek sayısı sınırını ($maxOpts) aştığı için analiz dışı bırakıldı.",
+                $skipped, null);
         }
         $stats = $this->stats($matchId);
         $provider = LlmFactory::providerName();
@@ -729,6 +779,7 @@ class AnalysisEngine
             $model = $result['model'];
             $tokens = $result['tokens'];
             $done = 0;
+            $msParsed = null;
             foreach ($defs as $key => $def) {
                 $mkIn = $byKey[$key] ?? null;
                 if (!is_array($mkIn)) {
@@ -740,6 +791,9 @@ class AnalysisEngine
                 }
                 $mkIn['secenekler'] = $mkIn['secenekler'] ?? [];
                 $parsed = $this->annotateMarketResult($mkIn, $def);
+                if ($key === 'MS') {
+                    $msParsed = $parsed;
+                }
                 Database::execute(
                     "UPDATE market_analyses SET status='done', model_name=?, result=?, token_usage=?, error_message=NULL, created_at=NOW()
                      WHERE match_id=? AND market_key=?",
@@ -747,13 +801,92 @@ class AnalysisEngine
                 );
                 $done++;
             }
+
+            if ($done > 0) {
+                $this->notifyWaiters($matchId, $match, $msParsed);
+            }
             return $done;
         } catch (\Throwable $e) {
             Database::execute(
                 "UPDATE market_analyses SET status='failed', error_message=? WHERE match_id=? AND status='pending'",
                 [mb_substr($e->getMessage(), 0, 500), $matchId]
             );
+            $this->notifyFailure($matchId, $match);
             throw $e;
+        }
+    }
+
+    /**
+     * Analiz hazır olduğunda maçı bekleyen kullanıcılara bildirim düşer.
+     * "Bekleyen" = son 6 saat içinde bu maçı görüntülemiş kullanıcılar
+     * (analiz talebi geçmişe kayıt düştüğü için talep edenler buraya dahildir).
+     */
+    private function notifyWaiters(int $matchId, array $match, $msResult): void
+    {
+        if ((string) Settings::get('notify_on_analysis_ready', '1') !== '1') {
+            return;
+        }
+        $name = trim((string) ($match['home_name'] ?? '') . ' - ' . (string) ($match['away_name'] ?? ''), ' -');
+        if ($name === '') {
+            $name = 'Maç';
+        }
+
+        // MS analizinden kısa bir özet çıkar (bildirimde göstermek için)
+        $summary = [];
+        if (is_array($msResult)) {
+            $tavsiye = (string) ($msResult['tavsiye'] ?? '');
+            if ($tavsiye !== '') {
+                $label = $tavsiye;
+                $pct = null;
+                foreach (($msResult['secenekler'] ?? []) as $s) {
+                    if (is_array($s) && (string) ($s['kod'] ?? '') === $tavsiye) {
+                        $label = (string) ($s['ad'] ?? $tavsiye);
+                        $pct = isset($s['olasilik']) ? (int) $s['olasilik'] : null;
+                        break;
+                    }
+                }
+                $summary = ['tavsiye' => $label, 'olasilik' => $pct, 'kod' => $tavsiye];
+            }
+        }
+
+        try {
+            $rows = Database::fetchAll(
+                'SELECT user_id FROM user_analysis_history
+                 WHERE match_id = ? AND last_viewed_at >= NOW() - INTERVAL 6 HOUR',
+                [$matchId]
+            );
+        } catch (\Throwable $e) {
+            return;
+        }
+        foreach ($rows as $r) {
+            NotificationService::analysisReady((int) $r['user_id'], $matchId, $name, $summary);
+        }
+    }
+
+    /** Analiz üretilemediğinde bekleyenleri bilgilendirir (kredi düşmemiştir). */
+    private function notifyFailure(int $matchId, array $match): void
+    {
+        if ((string) Settings::get('notify_on_analysis_ready', '1') !== '1') {
+            return;
+        }
+        $name = trim((string) ($match['home_name'] ?? '') . ' - ' . (string) ($match['away_name'] ?? ''), ' -');
+        try {
+            $rows = Database::fetchAll(
+                'SELECT user_id FROM user_analysis_history
+                 WHERE match_id = ? AND last_viewed_at >= NOW() - INTERVAL 1 HOUR',
+                [$matchId]
+            );
+        } catch (\Throwable $e) {
+            return;
+        }
+        foreach ($rows as $r) {
+            NotificationService::push(
+                (int) $r['user_id'],
+                NotificationService::TYPE_FAILED,
+                ($name !== '' ? $name : 'Maç') . ' analizi tamamlanamadı',
+                'Yapay zeka şu an yanıt veremedi. Krediniz düşmedi; birazdan tekrar deneyebilirsiniz.',
+                $matchId
+            );
         }
     }
 
