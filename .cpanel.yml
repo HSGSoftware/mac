@@ -1,0 +1,20 @@
+---
+# cPanel Git Version Control ile otomatik deploy.
+#
+# cPanel > Git Version Control'de bu repo klonlanır ve "Deploy HEAD Commit"e
+# basıldığında aşağıdaki görevler repo kökünde çalışır: backend/ dosyalarını
+# public_html/macradar/ altına kopyalar.
+#
+# Güvenli: config/config.php'ye DOKUNMAZ (repoda yoktur), install.php ve
+# repodan kaldırılan preset_analyses.php sunucudan silinir.
+#
+# NOT: Hedef, webdigistore.com'un ana docroot'u varsayımıyla
+# $HOME/public_html/macradar'dır. Farklıysa DEST satırını düzenleyin.
+deployment:
+  tasks:
+    - export DEST="$HOME/public_html/macradar"
+    - /bin/mkdir -p "$DEST"
+    - /bin/cp -R backend/public_html/. "$DEST/"
+    - /bin/cp -R backend/src "$DEST/"
+    - /bin/cp -R backend/database "$DEST/"
+    - /bin/rm -f "$DEST/install.php" "$DEST/admin/preset_analyses.php"
