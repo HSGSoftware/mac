@@ -9,6 +9,7 @@ backend/logs/*.log
 .flutter-plugins
 .flutter-plugins-dependencies
 .packages
+pubspec.lock
 build/
 .pub-cache/
 .pub/
@@ -17,6 +18,11 @@ ios/.symlinks/
 android/.gradle/
 android/local.properties
 android/key.properties
+# Gradle wrapper + üretilen dosyalar CI'da otomatik üretilir
+android/gradlew
+android/gradlew.bat
+android/gradle/wrapper/gradle-wrapper.jar
+android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
 **/*.keystore
 **/*.jks
 .idea/

@@ -8,6 +8,7 @@ import '../providers/providers.dart';
 import '../widgets/badges.dart';
 import '../widgets/paywall_sheet.dart';
 import 'app_header.dart';
+import 'notifications_sheet.dart';
 
 /// Hesap ekranı: profil + paket durumu + paket ayrıcalıkları + tercihler.
 class AccountScreen extends ConsumerWidget {
@@ -16,7 +17,7 @@ class AccountScreen extends ConsumerWidget {
   /// (özellik, gereken kademe)
   static const _perks = <(String, int)>[
     ('Günlük AI analiz kredisi (her gün yenilenir)', 0),
-    ('Her market için ayrı AI analizi', 0),
+    ('Maç Sonucu analizi her zaman ücretsiz', 0),
     ('Günde 20 kredi + Gol marketleri oranları', 1),
     ('Günde 50 kredi + Handikap & Kombine oranları', 2),
     ('Günün AI Kuponu', 2),
@@ -141,7 +142,18 @@ class AccountScreen extends ConsumerWidget {
                 ),
                 child: Column(
                   children: [
-                    _prefRow('Bildirimler', 'DEĞER sinyalleri açık'),
+                    Builder(
+                      builder: (ctx) {
+                        final unread =
+                            ref.watch(notificationsProvider).unread;
+                        return _actionRow(
+                          icon: Icons.notifications_none,
+                          label: 'Bildirimler',
+                          trailing: unread > 0 ? '$unread yeni' : null,
+                          onTap: () => showNotifications(ctx),
+                        );
+                      },
+                    ),
                     const Divider(height: 1, color: AppColors.surface2),
                     _prefRow('Oran formatı', 'Ondalık (2.10)'),
                     const Divider(height: 1, color: AppColors.surface2),
@@ -272,7 +284,7 @@ class AccountScreen extends ConsumerWidget {
           const SizedBox(height: 7),
           Text(
               'Krediniz her gün yenilenir; kullanılmayan krediler ertesi güne devretmez. '
-              'Her market analizi ayrı kredi tüketir.',
+              'Maç Sonucu analizi ücretsizdir; kredi yalnızca ücretli marketleri açarken düşer.',
               style: AppText.sans(
                   size: 10.5,
                   weight: FontWeight.w500,
@@ -340,6 +352,7 @@ class AccountScreen extends ConsumerWidget {
     required IconData icon,
     required String label,
     required VoidCallback onTap,
+    String? trailing,
     bool danger = false,
   }) {
     final color = danger ? AppColors.danger : AppColors.textPrimary;
@@ -351,7 +364,21 @@ class AccountScreen extends ConsumerWidget {
           children: [
             Icon(icon, size: 18, color: danger ? AppColors.danger : AppColors.textSecondary),
             const SizedBox(width: 11),
-            Text(label, style: AppText.sans(size: 12.5, weight: FontWeight.w600, color: color)),
+            Expanded(
+              child: Text(label,
+                  style: AppText.sans(size: 12.5, weight: FontWeight.w600, color: color)),
+            ),
+            if (trailing != null)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(trailing,
+                    style: AppText.sans(
+                        size: 10, weight: FontWeight.w800, color: AppColors.primary)),
+              ),
           ],
         ),
       ),

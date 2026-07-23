@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/router.dart';
 import '../core/theme.dart';
+import '../providers/providers.dart';
+import '../services/local_notifier.dart';
 import 'account_screen.dart';
 import 'coupon_screen.dart';
 import 'matches_screen.dart';
@@ -14,7 +17,8 @@ class HomeShell extends ConsumerStatefulWidget {
   ConsumerState<HomeShell> createState() => _HomeShellState();
 }
 
-class _HomeShellState extends ConsumerState<HomeShell> {
+class _HomeShellState extends ConsumerState<HomeShell>
+    with WidgetsBindingObserver {
   int _index = 0;
 
   static const _pages = [
@@ -23,6 +27,33 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     MyAnalysesScreen(),
     AccountScreen(),
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // Giriş yapıldıysa bildirim yoklamasını başlat + cihaz bildirimine dokununca
+    // ilgili maça git.
+    LocalNotifier.instance.onTapMatch = (matchId) {
+      ref.read(routerProvider).push('/match/$matchId');
+    };
+    Future.microtask(() => ref.read(notificationsProvider.notifier).start());
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    ref.read(notificationsProvider.notifier).stop();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Uygulama öne gelince bildirimleri hemen tazele
+    if (state == AppLifecycleState.resumed) {
+      ref.read(notificationsProvider.notifier).refresh();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

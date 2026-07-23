@@ -7,6 +7,7 @@ import '../core/constants.dart';
 import '../core/theme.dart';
 import '../models/my_analysis.dart';
 import '../providers/providers.dart';
+import '../widgets/team_logo.dart';
 import 'app_header.dart';
 
 /// "Analizlerim": kullanıcının incelediği maçların AI sonuçları + isabet takibi.
@@ -16,6 +17,12 @@ class MyAnalysesScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final data = ref.watch(myAnalysesProvider);
+    // Yeni bir "analiz hazır" bildirimi geldiğinde listeyi tazele
+    ref.listen(notificationsProvider, (prev, next) {
+      if (next.unread > (prev?.unread ?? 0)) {
+        ref.invalidate(myAnalysesProvider);
+      }
+    });
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -91,7 +98,9 @@ class MyAnalysesScreen extends ConsumerWidget {
   }
 
   Widget _row(BuildContext context, MyAnalysisItem a) {
-    final chip = _statusChip(a.status);
+    final chip = a.analysisPending && !a.hasAnalysis
+        ? ('HAZIRLANIYOR', AppColors.primary.withValues(alpha: 0.18), AppColors.primary)
+        : _statusChip(a.status);
     return GestureDetector(
       onTap: () => context.push('/match/${a.matchId}'),
       child: Container(
@@ -126,11 +135,21 @@ class MyAnalysesScreen extends ConsumerWidget {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 3),
-                  Text(a.match,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppText.sans(size: 13, weight: FontWeight.w700)),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      TeamLogo(url: a.homeLogo, name: a.homeName, size: 16),
+                      const SizedBox(width: 4),
+                      TeamLogo(url: a.awayLogo, name: a.awayName, size: 16),
+                      const SizedBox(width: 7),
+                      Expanded(
+                        child: Text(a.match,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppText.sans(size: 13, weight: FontWeight.w700)),
+                      ),
+                    ],
+                  ),
                   const SizedBox(height: 3),
                   if (a.hasAnalysis && a.pick != null)
                     Text.rich(TextSpan(children: [
@@ -146,8 +165,25 @@ class MyAnalysesScreen extends ConsumerWidget {
                               '${a.modelPct != null ? ' · %${a.modelPct}' : ''}',
                           style: AppText.sans(size: 10.5, weight: FontWeight.w700)),
                     ]))
+                  else if (a.analysisPending)
+                    Row(
+                      children: [
+                        const SizedBox(
+                          width: 10,
+                          height: 10,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 1.6, color: AppColors.primary),
+                        ),
+                        const SizedBox(width: 6),
+                        Text('Analiz hazırlanıyor…',
+                            style: AppText.sans(
+                                size: 10.5,
+                                weight: FontWeight.w600,
+                                color: AppColors.primary)),
+                      ],
+                    )
                   else
-                    Text('Henüz analiz yapılmadı',
+                    Text('Analiz için dokunun',
                         style: AppText.sans(
                             size: 10.5,
                             weight: FontWeight.w500,

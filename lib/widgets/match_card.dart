@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../core/theme.dart';
 import '../models/match.dart';
 import 'badges.dart';
+import 'team_logo.dart';
 
 /// Bülten/canlı listelerinde tek maç kartı (Maç Analiz tasarımı).
 class MatchCard extends StatelessWidget {
@@ -92,15 +93,39 @@ class MatchCard extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(match.home.name ?? '-',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: AppText.sans(size: 14, weight: FontWeight.w700)),
-                          const SizedBox(height: 5),
-                          Text(match.away.name ?? '-',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: AppText.sans(size: 14, weight: FontWeight.w700)),
+                          Row(
+                            children: [
+                              TeamLogo(
+                                  url: match.home.logo,
+                                  name: match.home.name,
+                                  size: 20),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(match.home.name ?? '-',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: AppText.sans(
+                                        size: 14, weight: FontWeight.w700)),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Row(
+                            children: [
+                              TeamLogo(
+                                  url: match.away.logo,
+                                  name: match.away.name,
+                                  size: 20),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(match.away.name ?? '-',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: AppText.sans(
+                                        size: 14, weight: FontWeight.w700)),
+                              ),
+                            ],
+                          ),
                         ],
                       ),
                     ),
@@ -137,6 +162,8 @@ class MatchCard extends StatelessWidget {
   Widget _oddCell(String label, double? value, MatchSignal? sig, String code) {
     final isFav = premium && sig != null && sig.pick == code;
     final isValue = premium && sig != null && sig.hasValue && sig.pick == code;
+    // Bültende yalnızca modelin favori seçiminin yüzdesi bilinir; onu göster.
+    final aiPct = isFav ? sig.modelPct : null;
     return Expanded(
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 8),
@@ -165,6 +192,14 @@ class MatchCard extends StatelessWidget {
                 color: isValue ? AppColors.primary : AppColors.textPrimary,
               ),
             ),
+            if (aiPct != null) ...[
+              const SizedBox(height: 2),
+              Text('AI %$aiPct',
+                  style: AppText.sans(
+                      size: 8.5,
+                      weight: FontWeight.w700,
+                      color: AppColors.primary)),
+            ],
           ],
         ),
       ),

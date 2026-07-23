@@ -1,4 +1,5 @@
-/// KREDİ sistemi modelleri: her market AYRI analiz edilir ve ayrı kredi tüketir.
+// KREDİ sistemi modelleri: bir maçın tüm marketleri birlikte analiz edilir;
+// kredi yalnızca ücretli marketleri görüntülerken düşer.
 
 /// Bir market analizindeki tek seçenek (AI olasılığı + değer bilgisi).
 class OptionAnalysis {
@@ -69,6 +70,24 @@ class MarketAiAnalysis {
     return null;
   }
 
+  /// Seçeneği kod VEYA ada göre bulur. Bültendeki oran kutusu marketin
+  /// seçenek ETİKETİNİ (ad) taşırken AI çıktısı KOD ile çalışır; MS gibi
+  /// marketlerde bu ikisi farklıdır (kod=MS1, ad="Ev sahibi kazanır").
+  OptionAnalysis? optionByLabel(String label) {
+    for (final o in secenekler) {
+      if (o.kod == label || o.ad == label) return o;
+    }
+    return null;
+  }
+
+  /// Bu etiketli seçenek AI'nin önerdiği (tavsiye) seçenek mi?
+  bool isRecommendedLabel(String label) {
+    if (tavsiye == null) return false;
+    if (tavsiye == label) return true;
+    final t = optionFor(tavsiye!);
+    return t != null && (t.ad == label || t.kod == label);
+  }
+
   /// Önerilen seçenek (tavsiye koduna göre).
   OptionAnalysis? get tavsiyeSecenek =>
       tavsiye != null ? optionFor(tavsiye!) : null;
@@ -111,12 +130,14 @@ class BetMarket {
   final double? line; // gol çizgisi (SOV), varsa
   final String? key; // sunucunun verdiği analiz anahtarı (m_<hash>)
   final String? group; // grup anahtarı (ana/gol/handikap/ozel)
+  final int creditCost; // bu marketin AI analizinin kredi maliyeti (0 = ücretsiz)
   final List<MarketOutcome> outcomes;
   BetMarket({
     required this.name,
     this.line,
     this.key,
     this.group,
+    this.creditCost = 0,
     required this.outcomes,
   });
 
@@ -125,6 +146,7 @@ class BetMarket {
         line: (j['sov'] as num?)?.toDouble(),
         key: j['key']?.toString(),
         group: j['grup']?.toString(),
+        creditCost: (j['credit_cost'] as num?)?.toInt() ?? 0,
         outcomes: ((j['secenekler'] as List?) ?? [])
             .whereType<Map>()
             .map((e) => MarketOutcome.fromJson(Map<String, dynamic>.from(e)))
@@ -167,9 +189,10 @@ class MatchDetail {
   final List<MarketGroupInfo> marketGroups;
   final Map<String, dynamic> stats;
   final List<MarketAiAnalysis> marketAnalyses; // kullanıcının açtıkları
-  final int creditCostMarket; // bir market analizinin kredi maliyeti
+  final int creditCostMarket; // tipik ücretli market maliyeti (bilgi amaçlı)
   final int creditCostLiveMarket; // canlı maçta (yalnız Altın)
   final int? creditsLeft; // giriş yapan kullanıcının kalan günlük kredisi
+  final bool analysisPending; // maçın tüm marketleri arka planda üretiliyor mu
 
   MatchDetail({
     required this.match,
@@ -181,6 +204,7 @@ class MatchDetail {
     this.creditCostMarket = 1,
     this.creditCostLiveMarket = 2,
     this.creditsLeft,
+    this.analysisPending = false,
   });
 
   factory MatchDetail.fromJson(Map<String, dynamic> j) {
@@ -227,6 +251,7 @@ class MatchDetail {
       creditCostMarket: (costs['market'] as num?)?.toInt() ?? 1,
       creditCostLiveMarket: (costs['live_market'] as num?)?.toInt() ?? 2,
       creditsLeft: (j['credits_left'] as num?)?.toInt(),
+      analysisPending: j['analysis_pending'] as bool? ?? false,
     );
   }
 }

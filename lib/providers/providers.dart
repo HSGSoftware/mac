@@ -1,11 +1,15 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/analysis.dart';
 import '../models/coupon.dart';
 import '../models/match.dart';
 import '../models/my_analysis.dart';
+import '../models/notification.dart';
 import '../models/user.dart';
 import '../services/api_client.dart';
+import '../services/local_notifier.dart';
 import '../services/token_store.dart';
 
 final tokenStoreProvider = Provider<TokenStore>((ref) => TokenStore());
@@ -88,6 +92,25 @@ class AuthNotifier extends StateNotifier<AuthState> {
     } catch (_) {}
   }
 
+  /// Okunmamış bildirim rozetini yerelden günceller (/me çağırmadan).
+  void setUnread(int unread) {
+    final u = state.user;
+    if (u == null || u.unreadNotifications == unread) return;
+    state = state.copyWith(
+      user: AppUser(
+        id: u.id,
+        email: u.email,
+        name: u.name,
+        plan: u.plan,
+        premiumUntil: u.premiumUntil,
+        dailyAnalysisCount: u.dailyAnalysisCount,
+        dailyCredits: u.dailyCredits,
+        creditsLeft: u.creditsLeft,
+        unreadNotifications: unread,
+      ),
+    );
+  }
+
   Future<void> logout() async {
     await ref.read(tokenStoreProvider).clear();
     state = const AuthState();
@@ -96,6 +119,97 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
 final authProvider =
     StateNotifierProvider<AuthNotifier, AuthState>((ref) => AuthNotifier(ref));
+
+// ---------------- Bildirimler ----------------
+
+class NotificationsState {
+  final List<AppNotification> items;
+  final int unread;
+  const NotificationsState({this.items = const [], this.unread = 0});
+}
+
+/// Uygulama içi bildirimleri periyodik yoklar; yeni "analiz hazır" bildirimi
+/// gelince cihaz bildirimi gösterir. Kullanıcı giriş yapınca [start], çıkınca
+/// [stop] çağrılır (HomeShell yönetir).
+class NotificationsNotifier extends StateNotifier<NotificationsState> {
+  final Ref ref;
+  Timer? _timer;
+  final Set<int> _seen = {};
+  bool _primed = false; // ilk yükleme: eski bildirimler için ses/titreşim yok
+
+  NotificationsNotifier(this.ref) : super(const NotificationsState());
+
+  void start() {
+    if (_timer != null) return;
+    LocalNotifier.instance.init();
+    refresh();
+    _timer = Timer.periodic(const Duration(seconds: 25), (_) => refresh());
+  }
+
+  void stop() {
+    _timer?.cancel();
+    _timer = null;
+    _seen.clear();
+    _primed = false;
+    state = const NotificationsState();
+  }
+
+  Future<void> refresh() async {
+    try {
+      final data = await ref.read(apiClientProvider).get('/me/notifications');
+      final items = ((data['items'] as List?) ?? [])
+          .map((e) => AppNotification.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+      final unread = (data['unread'] as num?)?.toInt() ?? 0;
+
+      // Yeni gelen okunmamış "hazır" bildirimleri cihazda göster
+      for (final n in items) {
+        if (_seen.contains(n.id)) continue;
+        _seen.add(n.id);
+        if (_primed && !n.isRead && n.isReady) {
+          LocalNotifier.instance
+              .show(n.title, n.body ?? '', matchId: n.matchId);
+        }
+      }
+      _primed = true;
+      state = NotificationsState(items: items, unread: unread);
+      // Rozet sayısını /me ile de senkron tut
+      ref.read(authProvider.notifier).setUnread(unread);
+    } catch (_) {
+      // sessiz: ağ hatası bir sonraki yoklamada düzelir
+    }
+  }
+
+  Future<void> markAllRead() async {
+    // İyimser güncelleme
+    state = NotificationsState(
+      items: state.items.map((n) => n.copyWith(isRead: true)).toList(),
+      unread: 0,
+    );
+    ref.read(authProvider.notifier).setUnread(0);
+    try {
+      await ref.read(apiClientProvider).post('/me/notifications/read');
+    } catch (_) {}
+  }
+
+  Future<void> markRead(int id) async {
+    state = NotificationsState(
+      items: state.items
+          .map((n) => n.id == id ? n.copyWith(isRead: true) : n)
+          .toList(),
+      unread: (state.unread - 1).clamp(0, 1 << 30),
+    );
+    ref.read(authProvider.notifier).setUnread(state.unread);
+    try {
+      await ref.read(apiClientProvider).post('/me/notifications/read',
+          data: {'id': id});
+    } catch (_) {}
+  }
+}
+
+final notificationsProvider =
+    StateNotifierProvider<NotificationsNotifier, NotificationsState>(
+        (ref) => NotificationsNotifier(ref));
 
 // ---------------- Bülten (maç listesi) ----------------
 

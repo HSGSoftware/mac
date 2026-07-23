@@ -7,6 +7,7 @@ class AppUser {
   final int dailyAnalysisCount;
   final int dailyCredits; // paketin günlük kredi hakkı (her gün sıfırlanır)
   final int creditsLeft; // bugün kalan kredi
+  final int unreadNotifications; // okunmamış bildirim sayısı
 
   AppUser({
     required this.id,
@@ -17,6 +18,7 @@ class AppUser {
     required this.dailyAnalysisCount,
     this.dailyCredits = 0,
     this.creditsLeft = 0,
+    this.unreadNotifications = 0,
   });
 
   /// Paket kademesi: 0=Ücretsiz, 1=Bronz, 2=Gümüş, 3=Altın.
@@ -49,5 +51,6 @@ class AppUser {
         dailyAnalysisCount: j['daily_analysis_count'] as int? ?? 0,
         dailyCredits: (j['daily_credits'] as num?)?.toInt() ?? 0,
         creditsLeft: (j['credits_left'] as num?)?.toInt() ?? 0,
+        unreadNotifications: (j['unread_notifications'] as num?)?.toInt() ?? 0,
       );
 }

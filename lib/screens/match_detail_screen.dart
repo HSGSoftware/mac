@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -12,6 +14,7 @@ import '../widgets/badges.dart';
 import '../widgets/bars.dart';
 import '../widgets/odds_box.dart';
 import '../widgets/paywall_sheet.dart';
+import '../widgets/team_logo.dart';
 
 /// Maç detay ekranı — KREDİ sistemi:
 /// her market AYRI analiz edilir ve ayrı kredi tüketir; canlı maç analizleri
@@ -30,7 +33,43 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
   /// Şu an analiz edilen market anahtarları (buton spinner'ı için).
   final Set<String> _busy = {};
 
-  /// Belirtilen marketi kredi harcayarak analiz ettirir.
+  /// Arka planda analiz üretiliyor (kullanıcı beklemez).
+  bool _preparing = false;
+
+  /// Analizin hazır olup olmadığını yoklayan zamanlayıcı.
+  Timer? _pollTimer;
+  int _pollTicks = 0;
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
+  }
+
+  /// Analiz hazır olana kadar maç detayını periyodik tazeler (en fazla ~3 dk).
+  void _startPolling() {
+    _pollTicks = 0;
+    _pollTimer?.cancel();
+    _pollTimer = Timer.periodic(const Duration(seconds: 8), (t) {
+      _pollTicks++;
+      if (!mounted || _pollTicks > 24) {
+        t.cancel();
+        _pollTimer = null;
+        return;
+      }
+      ref.invalidate(matchDetailProvider(widget.matchId));
+      ref.read(notificationsProvider.notifier).refresh();
+    });
+  }
+
+  void _stopPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+  }
+
+  /// Belirtilen marketi analiz ettirir. Hazır değilse kullanıcı beklemez:
+  /// arka planda üretilir, "hazırlanıyor" durumu gösterilir ve hazır olunca
+  /// bildirim gelir.
   Future<void> _analyzeMarket(String marketKey) async {
     if (_busy.contains(marketKey)) return;
     setState(() => _busy.add(marketKey));
@@ -39,23 +78,16 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
         '/matches/${widget.matchId}/analyze-market',
         data: {'market_key': marketKey},
       );
-      // Analiz hazır değilse: arka planda üretiliyor. Kullanıcı beklemez;
-      // "Analizlerim"e düşer, hazır olunca orada görünür.
       if (data is Map && data['preparing'] == true) {
         if (mounted) {
+          setState(() => _preparing = true);
           final msg = data['message']?.toString() ??
-              'Analiz hazırlanıyor, birazdan "Analizlerim" bölümünde olacak.';
+              'Analiz hazırlanıyor; hazır olunca bildirim göndereceğiz.';
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(msg),
-              duration: const Duration(seconds: 6),
-            ),
+            SnackBar(content: Text(msg), duration: const Duration(seconds: 5)),
           );
         }
-        // Bir süre sonra maç detayını tazele ki hazır sonuç görünsün.
-        Future.delayed(const Duration(seconds: 12), () {
-          if (mounted) ref.invalidate(matchDetailProvider(widget.matchId));
-        });
+        _startPolling();
         return;
       }
       final result =
@@ -90,6 +122,8 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
           final m = d.match;
           final home = m['home']?['name']?.toString() ?? '-';
           final away = m['away']?['name']?.toString() ?? '-';
+          final homeLogo = m['home']?['logo']?.toString();
+          final awayLogo = m['away']?['logo']?.toString();
           final league = m['league']?['name']?.toString() ?? '';
           final isLive = m['status'] == 'live';
           final score = m['score'];
@@ -100,18 +134,36 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
             for (final a in d.marketAnalyses) a.marketKey: a,
             ..._results,
           };
-          final cost = isLive ? d.creditCostLiveMarket : d.creditCostMarket;
           final creditsLeft = user?.creditsLeft ?? d.creditsLeft ?? 0;
           final msAnalysis = analyses['MS'];
 
+          // Analiz durumuna göre polling'i yönet.
+          final preparing = _preparing || d.analysisPending;
+          if (d.analysisPending && _pollTimer == null) {
+            // Başkası tetiklemiş olsa bile hazır olana kadar tazele
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) _startPolling();
+            });
+          } else if (!d.analysisPending &&
+              _pollTimer != null &&
+              analyses.isNotEmpty) {
+            _stopPolling();
+            if (_preparing) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) setState(() => _preparing = false);
+              });
+            }
+          }
+
           return Column(
             children: [
-              _header(context, home, away, league, isLive, score,
-                  m['minute']?.toString(), creditsLeft, user != null),
+              _header(context, home, away, homeLogo, awayLogo, league, isLive,
+                  score, m['minute']?.toString(), creditsLeft, user != null),
               Expanded(
                 child: ListView(
                   padding: const EdgeInsets.fromLTRB(16, 14, 16, 28),
                   children: [
+                    if (preparing) _preparingBanner(),
                     _sectionHead('Kazanma olasılıkları',
                         trailing:
                             msAnalysis != null ? 'model vs. oranın iması' : null),
@@ -122,7 +174,7 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
                       _analyzeButton(
                         marketKey: 'MS',
                         label: 'Maç Sonucu AI Analizi',
-                        cost: cost,
+                        cost: 0, // Ana marketler ücretsiz
                         isLive: isLive,
                         tier: tier,
                         hasResult: msAnalysis != null,
@@ -165,8 +217,7 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
                     ],
                     if (d.marketGroups.isNotEmpty) ...[
                       const SizedBox(height: 18),
-                      ..._groupedMarkets(d, analyses, isLive, tier, cost,
-                          creditsLeft),
+                      ..._groupedMarkets(d, analyses, isLive, tier, creditsLeft),
                     ],
                     const SizedBox(height: 18),
                     Text(
@@ -189,8 +240,18 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
 
   // ---------------- Başlık ----------------
 
-  Widget _header(BuildContext context, String home, String away, String league,
-      bool isLive, dynamic score, String? minute, int creditsLeft, bool loggedIn) {
+  Widget _header(
+      BuildContext context,
+      String home,
+      String away,
+      String? homeLogo,
+      String? awayLogo,
+      String league,
+      bool isLive,
+      dynamic score,
+      String? minute,
+      int creditsLeft,
+      bool loggedIn) {
     return Container(
       decoration: const BoxDecoration(
         gradient: AppColors.headerGradient,
@@ -210,10 +271,20 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('$home — $away',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppText.sans(size: 14, weight: FontWeight.w800)),
+                Row(
+                  children: [
+                    TeamLogo(url: homeLogo, name: home, size: 18),
+                    const SizedBox(width: 5),
+                    Flexible(
+                      child: Text('$home — $away',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppText.sans(size: 14, weight: FontWeight.w800)),
+                    ),
+                    const SizedBox(width: 5),
+                    TeamLogo(url: awayLogo, name: away, size: 18),
+                  ],
+                ),
                 const SizedBox(height: 2),
                 Text(
                     isLive ? '$league · Şu an oynanıyor' : league,
@@ -264,6 +335,47 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
               ),
             ),
           ],
+        ],
+      ),
+    );
+  }
+
+  /// "Analiz hazırlanıyor" bilgi bandı (kullanıcı beklemez, bildirim gelecek).
+  Widget _preparingBanner() {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(13),
+      decoration: BoxDecoration(
+        color: AppColors.accentFaint,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.accentDim),
+      ),
+      child: Row(
+        children: [
+          const SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(
+                strokeWidth: 2.2, color: AppColors.primary),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Analiz hazırlanıyor',
+                    style: AppText.sans(size: 12.5, weight: FontWeight.w800)),
+                const SizedBox(height: 2),
+                Text(
+                    'Yapay zeka bu maçın tüm marketlerini birlikte değerlendiriyor. '
+                    'Beklemenize gerek yok — hazır olunca bildirim göndereceğiz.',
+                    style: AppText.sans(
+                        size: 10.5,
+                        weight: FontWeight.w500,
+                        color: AppColors.textSecondary)),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -431,11 +543,12 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
         ),
       );
     }
+    final costText = cost == 0 ? 'ücretsiz' : '$cost kredi';
     final text = busy
         ? 'Analiz ediliyor…'
         : hasResult
-            ? (isLive ? '$label — Yenile ($cost kredi)' : label)
-            : '$label ($cost kredi)';
+            ? (isLive ? '$label — Yenile ($costText)' : label)
+            : '$label ($costText)';
     // Maç öncesi: sonuç varsa buton gizlenir (tekrar ücret yok, zaten açık)
     if (hasResult && !isLive && !busy) return const SizedBox.shrink();
     return Column(
@@ -628,7 +741,6 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
     Map<String, MarketAiAnalysis> analyses,
     bool isLive,
     int tier,
-    int cost,
     int creditsLeft,
   ) {
     // Görünür marketleri gruplarına dağıt
@@ -641,7 +753,9 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
     final children = <Widget>[
       Text('MARKET GRUPLARI', style: AppText.section()),
       const SizedBox(height: 4),
-      Text('Her marketin AI analizi ayrı kredi tüketir ($cost kredi/market).',
+      Text(
+          'Bir market açtığınızda maçın tüm marketleri birlikte hazırlanır. '
+          'Kredi yalnızca ücretli marketleri görüntülerken düşer.',
           style: AppText.sans(
               size: 10, weight: FontWeight.w500, color: AppColors.textMuted)),
       const SizedBox(height: 8),
@@ -652,7 +766,7 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
       children.add(_groupHeader(g, isOpen));
       if (isOpen) {
         for (final m in (byGroup[g.key] ?? <BetMarket>[])) {
-          children.add(_marketCard(m, analyses, isLive, tier, cost, creditsLeft));
+          children.add(_marketCard(m, analyses, isLive, tier, creditsLeft));
         }
       }
       children.add(const SizedBox(height: 6));
@@ -717,7 +831,6 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
     Map<String, MarketAiAnalysis> analyses,
     bool isLive,
     int tier,
-    int cost,
     int creditsLeft,
   ) {
     final key = m.key;
@@ -744,7 +857,7 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
                 _analyzeButton(
                   marketKey: key,
                   label: 'AI Analiz',
-                  cost: cost,
+                  cost: m.creditCost,
                   isLive: isLive,
                   tier: tier,
                   hasResult: result != null,
@@ -758,7 +871,8 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
             spacing: 7,
             runSpacing: 7,
             children: m.outcomes.map<Widget>((o) {
-              final opt = result?.optionFor(o.label);
+              // Eşleştirme kod VEYA ada göre (MS gibi marketlerde kod≠ad).
+              final opt = result?.optionByLabel(o.label);
               return ConstrainedBox(
                 constraints: const BoxConstraints(minWidth: 74),
                 child: OddsBox(
@@ -766,7 +880,8 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen> {
                   value: o.odd,
                   compact: true,
                   aiPct: opt?.olasilik,
-                  recommended: result != null && result.tavsiye == o.label,
+                  recommended:
+                      result != null && result.isRecommendedLabel(o.label),
                 ),
               );
             }).toList(),

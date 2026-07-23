@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 
 import '../core/theme.dart';
 import '../widgets/badges.dart';
+import '../widgets/notification_bell.dart';
 
 /// Üst başlık: MA logosu + "Maç Analiz" + (premium ise) PREMIUM rozeti + durum.
 class AppHeader extends StatelessWidget {
@@ -83,6 +84,8 @@ class AppHeader extends StatelessWidget {
               Text(clock, style: AppText.mono(size: 10, color: AppColors.textSecondary)),
             ],
           ),
+          const SizedBox(width: 2),
+          const NotificationBell(),
         ],
       ),
     );
@@ -94,26 +97,37 @@ class ScreenTitle extends StatelessWidget {
   final String title;
   final String? subtitle;
   final bool showDate;
-  const ScreenTitle({super.key, required this.title, this.subtitle, this.showDate = false});
+  final bool showBell;
+  const ScreenTitle(
+      {super.key,
+      required this.title,
+      this.subtitle,
+      this.showDate = false,
+      this.showBell = true});
 
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: EdgeInsets.fromLTRB(
-          18, MediaQuery.of(context).padding.top + 14, 18, 4),
+          18, MediaQuery.of(context).padding.top + 14, 12, 4),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               Expanded(
                 child: Text(title,
                     style: AppText.sans(size: 19, weight: FontWeight.w800)),
               ),
               if (showDate)
-                Text(DateFormat('d MMMM yyyy', 'tr_TR').format(DateTime.now()),
-                    style: AppText.mono(size: 10, color: AppColors.textSecondary)),
+                Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: Text(
+                      DateFormat('d MMMM yyyy', 'tr_TR').format(DateTime.now()),
+                      style: AppText.mono(size: 10, color: AppColors.textSecondary)),
+                ),
+              if (showBell) const NotificationBell(),
             ],
           ),
           if (subtitle != null) ...[

@@ -26,6 +26,9 @@ android {
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
+        // flutter_local_notifications, java.time API'lerini eski Android
+        // sürümlerinde kullanabilmek için core library desugaring gerektirir.
+        coreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -36,7 +39,7 @@ android {
 
     defaultConfig {
         applicationId = "com.macradar.app"
-        minSdk = 21
+        minSdkVersion = flutter.minSdkVersion
         targetSdk = 34
         versionCode = flutterVersionCode.toInteger()
         versionName = flutterVersionName
@@ -71,4 +74,9 @@ android {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // Core library desugaring (flutter_local_notifications için gerekli)
+    coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.1.2"
 }
